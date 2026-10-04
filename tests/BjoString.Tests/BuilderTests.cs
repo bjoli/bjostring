@@ -95,6 +95,27 @@ public static class BuilderTests
     }
 
     [Test]
+    public static void Utf16UnitsPairUp()
+    {
+        var rng = new Random(23);
+        for (int i = 0; i < Cases / 10; i++)
+        {
+            string s = Text(rng, 20);
+            var b = new Utf8StringBuilder();
+            foreach (char unit in s) b.AppendUtf16Unit(unit);
+            Check.Equal(s, b.ToUtf8String().ToString(), "units of valid text");
+        }
+        var lone = new Utf8StringBuilder().AppendUtf16Unit('a').AppendUtf16Unit('\uD83D');
+        Check.Throws<InvalidOperationException>(() => lone.ToUtf8String(), "lone high");
+        lone.AppendUtf16Unit('\uDE00');
+        Check.Equal("a😀", lone.ToUtf8String().ToString(), "paired later");
+        var low = new Utf8StringBuilder().AppendUtf16Unit('\uDE00');
+        Check.Throws<InvalidOperationException>(() => low.ToUtf8String(), "lone low");
+        var twoHighs = new Utf8StringBuilder().AppendUtf16Unit('\uD83D').AppendUtf16Unit('\uD83D').AppendUtf16Unit('\uDE00');
+        Check.Throws<InvalidOperationException>(() => twoHighs.ToUtf8String(), "first high stays lone");
+    }
+
+    [Test]
     public static void NumbersAsBjoNum()
     {
         var rng = new Random(21);

@@ -120,6 +120,46 @@ public sealed class Utf8StringBuilder
         return this;
     }
 
+    /// <summary>
+    /// Appends one UTF-16 code unit, for a reader taking text a unit at a time
+    /// from a .NET <c>TextReader</c>. A surrogate pair given in two calls
+    /// becomes its scalar; a surrogate left unpaired makes
+    /// <see cref="ToUtf8String"/> throw.
+    /// </summary>
+    public Utf8StringBuilder AppendUtf16Unit(char unit)
+    {
+        if (unit < 0x80)
+        {
+            Reserve(1)[0] = (byte)unit;
+            _length++;
+            return this;
+        }
+        if (!char.IsSurrogate(unit))
+        {
+            return Append(new Rune(unit));
+        }
+        // A surrogate is held as the three bytes UTF-8 would give it if it
+        // were a scalar (as WTF-8 does), which no valid string contains; a low
+        // one meeting a held high one replaces it with their pair's four bytes.
+        if (char.IsLowSurrogate(unit) && _length >= 3 && _buffer[_length - 3] == 0xED
+            && (_buffer[_length - 2] & 0xF0) == 0xA0)
+        {
+            char high = (char)(0xD000 | ((_buffer[_length - 2] & 0x3F) << 6) | (_buffer[_length - 1] & 0x3F));
+            _length -= 3;
+            return Append(new Rune(high, unit));
+        }
+        if (_unchecked < 0)
+        {
+            _unchecked = _length;
+        }
+        var held = Reserve(3);
+        held[0] = (byte)(0xE0 | (unit >> 12));
+        held[1] = (byte)(0x80 | ((unit >> 6) & 0x3F));
+        held[2] = (byte)(0x80 | (unit & 0x3F));
+        _length += 3;
+        return this;
+    }
+
     // Numbers in the invariant culture, written straight into the buffer.
     public Utf8StringBuilder Append(int n) => AppendFormatted(n);
 
