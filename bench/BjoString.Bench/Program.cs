@@ -79,6 +79,12 @@ Run("replace the → THE", "MB/s", u.ByteLength,
 Run("upcase", "MB/s", u.ByteLength,
     () => text.ToUpperInvariant().Length,
     () => u.ToUpperInvariant().ByteLength);
+Run("reverse", "MB/s", u.ByteLength,
+    () => Utf16Reverse(text).Length,
+    () => u.Reverse().ByteLength);
+Run("reverse, Cyrillic", "MB/s", cyrUtf8.ByteLength,
+    () => Utf16Reverse(cyrText).Length,
+    () => cyrUtf8.Reverse().ByteLength);
 Run("compare, short words", "Mops/s", shortWords.Length,
     () => { int c = 0; for (int i = 1; i < shortWords.Length; i++) c += string.CompareOrdinal(shortWords[i - 1], shortWords[i]); return c; },
     () => { int c = 0; for (int i = 1; i < shortUtf8.Length; i++) c += shortUtf8[i - 1].CompareTo(shortUtf8[i]); return c; });
@@ -169,6 +175,24 @@ static int Utf16Walk(string s)
         i += consumed;
     }
     return sum;
+}
+
+// The same job over UTF-16: reverse the units, then put pairs back in order.
+static string Utf16Reverse(string s)
+{
+    return string.Create(s.Length, s, static (d, s) =>
+    {
+        s.CopyTo(d);
+        d.Reverse();
+        for (int i = 0; i < d.Length - 1; i++)
+        {
+            if (char.IsLowSurrogate(d[i]) && char.IsHighSurrogate(d[i + 1]))
+            {
+                (d[i], d[i + 1]) = (d[i + 1], d[i]);
+                i++;
+            }
+        }
+    });
 }
 
 [MethodImpl(MethodImplOptions.NoInlining)]

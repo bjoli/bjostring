@@ -288,19 +288,34 @@ internal static class Utf8Ops
     /// <summary>The scalars in reverse order; the byte length does not change.</summary>
     public static byte[] Reverse(ReadOnlySpan<byte> s)
     {
-        var r = new byte[s.Length];
-        if (Ascii.IsValid(s))
+        var r = s.ToArray();
+        var d = r.AsSpan();
+        d.Reverse();
+        // Reversing the bytes reversed each sequence too, leaving its lead
+        // last; put them back in order.
+        int i = d.IndexOfAnyExceptInRange((byte)0, (byte)0x7F);
+        if (i < 0)
         {
-            s.CopyTo(r);
-            r.AsSpan().Reverse();
             return r;
         }
-        int i = 0;
-        while (i < s.Length)
+        while (i < d.Length)
         {
-            int w = Width(s[i]);
-            s.Slice(i, w).CopyTo(r.AsSpan(s.Length - i - w));
-            i += w;
+            if (d[i] < 0x80)
+            {
+                i++;
+                continue;
+            }
+            int last = i + 1;
+            while (IsContinuation(d[last]))
+            {
+                last++;
+            }
+            (d[i], d[last]) = (d[last], d[i]);
+            if (last - i == 3)
+            {
+                (d[i + 1], d[i + 2]) = (d[i + 2], d[i + 1]);
+            }
+            i = last + 1;
         }
         return r;
     }
