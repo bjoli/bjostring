@@ -159,7 +159,16 @@ public readonly partial struct Utf8String :
     /// </summary>
     public bool ContentEquals(ReadOnlySpan<byte> utf8) => AsSpan().SequenceEqual(utf8);
 
-    public override bool Equals(object? obj) => obj is Utf8String s && Equals(s);
+    /// <summary>
+    /// Equal to a string or a slice with the same text, both ways round, so
+    /// that values compared as <c>object</c> agree with the typed comparison.
+    /// </summary>
+    public override bool Equals(object? obj) => obj switch
+    {
+        Utf8String s => Equals(s),
+        StringSlice s => Equals(s),
+        _ => false,
+    };
 
     /// <summary>The same as the hash of a <see cref="StringSlice"/> with the same text.</summary>
     public override int GetHashCode() => Utf8Ops.Hash(AsSpan());

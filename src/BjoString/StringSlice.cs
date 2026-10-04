@@ -33,7 +33,7 @@ namespace BjoString;
 [DebuggerDisplay("{ToString(),nq}")]
 public readonly struct StringSlice :
     IEquatable<StringSlice>, IComparable<StringSlice>,
-    IComparisonOperators<StringSlice, StringSlice, bool>
+    IComparisonOperators<StringSlice, StringSlice, bool>, IUtf8Text
 {
     private readonly Utf8String _source;
     private readonly int _start;
@@ -122,11 +122,108 @@ public readonly struct StringSlice :
         return i < 0 ? null : new StringCursor(_start + i);
     }
 
+    /// <summary>The first occurrence at or after <paramref name="from"/>, a cursor of this slice, or null.</summary>
+    public StringCursor? IndexOf(StringSlice needle, StringCursor from)
+    {
+        if (from.Offset < _start || from.Offset > _start + _length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(from), "The cursor is outside the slice.");
+        }
+        int i = _source.AsSpan()[from.Offset..(_start + _length)].IndexOf(needle.AsSpan());
+        return i < 0 ? null : new StringCursor(from.Offset + i);
+    }
+
     public StringCursor? LastIndexOf(StringSlice needle)
     {
         int i = AsSpan().LastIndexOf(needle.AsSpan());
         return i < 0 ? null : new StringCursor(_start + i);
     }
+
+    public StringCursor? LastIndexOf(Rune r)
+    {
+        int i = Utf8Ops.LastIndexOf(AsSpan(), r);
+        return i < 0 ? null : new StringCursor(_start + i);
+    }
+
+    /// <summary>The text between two cursors of this slice, copied.</summary>
+    public Utf8String Substring(StringCursor start, StringCursor end) => Slice(start, end).ToUtf8String();
+
+    // The operations below make new text, and return the source itself when
+    // the slice is all of it and nothing changes.
+
+    /// <summary>Every occurrence of <paramref name="old"/> replaced, left to right and not overlapping.</summary>
+    public Utf8String Replace(StringSlice old, StringSlice replacement)
+    {
+        if (old.IsEmpty)
+        {
+            throw new ArgumentException("string-replace: the string to replace is empty.", nameof(old));
+        }
+        var r = Utf8Ops.Replace(AsSpan(), old.AsSpan(), replacement.AsSpan());
+        return r is null ? ToUtf8String() : new(r);
+    }
+
+    /// <summary>
+    /// The fields between separators, empty ones kept. An empty separator
+    /// gives the whole text as the one field, as .NET's <c>Split</c> does.
+    /// </summary>
+    public Utf8String[] Split(StringSlice separator)
+    {
+        var sep = separator.AsSpan();
+        if (sep.IsEmpty) return [ToUtf8String()];
+        var fields = new Utf8String[AsSpan().Count(sep) + 1];
+        int n = 0;
+        foreach (var field in EnumerateSplit(separator))
+        {
+            fields[n++] = field.ToUtf8String();
+        }
+        return fields;
+    }
+
+    /// <summary>Each scalar uppercased in the invariant culture.</summary>
+    public Utf8String ToUpperInvariant()
+    {
+        var r = Utf8Ops.MapCase(AsSpan(), upper: true);
+        return r is null ? ToUtf8String() : new(r);
+    }
+
+    /// <summary>Each scalar lowercased in the invariant culture.</summary>
+    public Utf8String ToLowerInvariant()
+    {
+        var r = Utf8Ops.MapCase(AsSpan(), upper: false);
+        return r is null ? ToUtf8String() : new(r);
+    }
+
+    /// <summary>Padded on the left with <paramref name="pad"/> to <paramref name="width"/> scalars.</summary>
+    public Utf8String PadLeft(int width, Rune pad) => Pad(width, pad, left: true);
+
+    /// <summary>Padded on the right with <paramref name="pad"/> to <paramref name="width"/> scalars.</summary>
+    public Utf8String PadRight(int width, Rune pad) => Pad(width, pad, left: false);
+
+    private Utf8String Pad(int width, Rune pad, bool left)
+    {
+        int missing = width - Count();
+        if (missing <= 0) return ToUtf8String();
+        var padBytes = Utf8Ops.Encode(pad, stackalloc byte[4]);
+        var text = AsSpan();
+        var r = new byte[checked(text.Length + missing * padBytes.Length)];
+        var fill = left ? r.AsSpan(0, r.Length - text.Length) : r.AsSpan(text.Length);
+        if (padBytes.Length == 1)
+        {
+            fill.Fill(padBytes[0]);
+        }
+        else
+        {
+            for (int i = 0; i < fill.Length; i += padBytes.Length)
+            {
+                padBytes.CopyTo(fill[i..]);
+            }
+        }
+        text.CopyTo(left ? r.AsSpan(r.Length - text.Length) : r);
+        return new(r);
+    }
+
+    /// <summary>The scalars in reverse order.</summary>
+    public Utf8String Reverse() => _length <= 1 ? ToUtf8String() : new(Utf8Ops.Reverse(AsSpan()));
 
     public StringSlice Trim() => Trimmed(start: true, end: true);
 
@@ -149,7 +246,13 @@ public readonly struct StringSlice :
 
     public bool ContentEquals(ReadOnlySpan<byte> utf8) => AsSpan().SequenceEqual(utf8);
 
-    public override bool Equals(object? obj) => obj is StringSlice s && Equals(s);
+    /// <summary>Equal to a slice or a string with the same text, as <see cref="Utf8String.Equals(object?)"/> is.</summary>
+    public override bool Equals(object? obj) => obj switch
+    {
+        StringSlice s => Equals(s),
+        Utf8String u => Equals(u),
+        _ => false,
+    };
 
     public override int GetHashCode() => Utf8Ops.Hash(AsSpan());
 

@@ -44,9 +44,18 @@ Mozilla Public License, version 2.0, with the linking exception in
   tests. A cursor from another string is caught when it lands inside a
   scalar, so `Substring` cannot cut one in two.
 - **`StringSlice`** is a string, a start and a length, with the cursors of
-  the string it slices. Trimming and splitting a slice allocate nothing,
-  and `Utf8StringComparer` lets a dictionary keyed by strings be probed with
-  a slice or with raw UTF-8 (`GetAlternateLookup<StringSlice>()`).
+  the string it slices, so a position found in a slice is valid in the
+  string. It is a separate type, asked for by name, rather than what every
+  string is: a string stays one reference wide, atomic to write, and keeps
+  no larger text alive. Trimming and splitting a slice allocate nothing.
+  A slice reads like a string (cursors, search, count, compare) and makes
+  new text like one (replace, split, case, pad, reverse, and `Concat` and
+  `Join` take slices), returning its source when it is all of it and
+  nothing changes; the string operations are those of the slice of the
+  whole string. It equals and hashes as a string with the same text does,
+  also when both are boxed, and `Utf8StringComparer` lets a dictionary
+  keyed by strings be probed with a slice or with raw UTF-8
+  (`GetAlternateLookup<StringSlice>()`).
 - **`Utf8StringBuilder`**: appends of strings, slices, scalars and numbers
   are valid by construction. `AppendByte` is the escape hatch for scanners
   that copy input byte by byte; those bytes are validated once, by
@@ -76,6 +85,7 @@ Mozilla Public License, version 2.0, with the linking exception in
 | `write-string`, `display` | `Utf8Text.Write(TextWriter, ...)` while ports are UTF-16 |
 | `(std rx)` | `new Input(s.AsMemory())`, match offsets → `new StringCursor(offset)` |
 | .NET calls taking `string` | `ToString()` / `FromUtf16` at the boundary |
+| `StringSlice` (new) | `StringSlice`: `Iterable`, `Cursor` and `Refable` with `StringCursor`, as `string` has |
 
 Things that change for Bjolang programs: `string-length` and the `*-code-*`
 procedures count bytes, so scanners that compare codes above 127 need a

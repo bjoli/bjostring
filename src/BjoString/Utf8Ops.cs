@@ -173,6 +173,16 @@ internal static class Utf8Ops
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int LastIndexOf(ReadOnlySpan<byte> s, Rune r)
+    {
+        if (r.Value < 0x80)
+        {
+            return s.LastIndexOf((byte)r.Value);
+        }
+        return s.LastIndexOf(Encode(r, stackalloc byte[4]));
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     private static bool IsAsciiWhiteSpace(byte b) => b == (byte)' ' || (uint)(b - '\t') <= '\r' - '\t';
 
     /// <summary>The bytes left after trimming white space (as <see cref="Rune.IsWhiteSpace"/> says).</summary>
