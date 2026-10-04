@@ -1,0 +1,18 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>BjoString</RootNamespace>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Cursor offsets are internal so that Bjolang code cannot read or forge
+         them; the runtime needs both to turn regex byte offsets into cursors. -->
+    <InternalsVisibleTo Include="BjolangRuntime" />
+    <InternalsVisibleTo Include="BjoString.Tests" />
+  </ItemGroup>
+
+</Project>
