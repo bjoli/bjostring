@@ -126,6 +126,10 @@ internal static class Cursors
         {
             return Unsafe.BitCast<uint, Rune>(b);
         }
+        if (b - 0xC2 < 0x1E)
+        {
+            return Unsafe.BitCast<uint, Rune>(((b & 0x1F) << 6) | (s[i + 1] & 0x3Fu));
+        }
         return DecodeAt(s, i, "string-cursor-ref").Rune;
     }
 
@@ -174,11 +178,16 @@ internal static class Cursors
         {
             return (Unsafe.BitCast<uint, Rune>(b), new(i + 1));
         }
+        if (b - 0xC2 < 0x1E)
+        {
+            return (Unsafe.BitCast<uint, Rune>(((b & 0x1F) << 6) | (s[i + 1] & 0x3Fu)), new(i + 2));
+        }
         var (r, width) = DecodeAt(s, i, "string-cursor-ref+next");
         return (r, new(i + width));
     }
 
-    // Out of line: the ASCII path is what the loops inline.
+    // Out of line: the ASCII and two-byte paths are what the loops inline.
+    [MethodImpl(MethodImplOptions.NoInlining)]
     private static (Rune Rune, int Width) DecodeAt(ReadOnlySpan<byte> s, int i, string op)
     {
         if (Utf8Ops.IsContinuation(s[i]))
