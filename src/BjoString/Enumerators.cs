@@ -16,7 +16,7 @@ using System.Text;
 
 namespace BjoString;
 
-/// <summary>The scalars of a string or slice, decoded in place.</summary>
+/// <summary>The scalars of a string, decoded in place.</summary>
 public struct RuneEnumerator : IEnumerator<Rune>, IEnumerable<Rune>
 {
     private readonly byte[]? _bytes;
@@ -56,26 +56,26 @@ public struct RuneEnumerator : IEnumerator<Rune>, IEnumerable<Rune>
 }
 
 /// <summary>The fields between separators, as slices of the string.</summary>
-public struct SplitEnumerator : IEnumerator<StringSlice>, IEnumerable<StringSlice>
+public struct SplitEnumerator : IEnumerator<Utf8String>, IEnumerable<Utf8String>
 {
-    private readonly Utf8String _source;
-    private readonly StringSlice _separator;
+    private readonly byte[]? _bytes;
+    private readonly Utf8String _separator;
     private readonly int _end;
     private int _next;
     private bool _done;
-    private StringSlice _current;
+    private Utf8String _current;
 
-    internal SplitEnumerator(StringSlice slice, StringSlice separator)
+    internal SplitEnumerator(Utf8String s, Utf8String separator)
     {
-        _source = slice.Source;
+        _bytes = s.Bytes;
         _separator = separator;
-        _next = slice.Start.Offset;
-        _end = slice.End.Offset;
+        _next = s.Start;
+        _end = s.End;
         _done = false;
         _current = default;
     }
 
-    public readonly StringSlice Current => _current;
+    public readonly Utf8String Current => _current;
 
     readonly object IEnumerator.Current => _current;
 
@@ -83,21 +83,21 @@ public struct SplitEnumerator : IEnumerator<StringSlice>, IEnumerable<StringSlic
     {
         if (_done) return false;
         var sep = _separator.AsSpan();
-        int k = sep.IsEmpty ? -1 : _source.AsSpan()[_next.._end].IndexOf(sep);
+        int k = sep.IsEmpty ? -1 : new ReadOnlySpan<byte>(_bytes, _next, _end - _next).IndexOf(sep);
         if (k < 0)
         {
-            _current = new StringSlice(_source, _next, _end - _next);
+            _current = new Utf8String(_bytes, _next, _end - _next);
             _done = true;
             return true;
         }
-        _current = new StringSlice(_source, _next, k);
+        _current = new Utf8String(_bytes, _next, k);
         _next += k + sep.Length;
         return true;
     }
 
     public readonly SplitEnumerator GetEnumerator() => this;
 
-    readonly IEnumerator<StringSlice> IEnumerable<StringSlice>.GetEnumerator() => this;
+    readonly IEnumerator<Utf8String> IEnumerable<Utf8String>.GetEnumerator() => this;
 
     readonly IEnumerator IEnumerable.GetEnumerator() => this;
 

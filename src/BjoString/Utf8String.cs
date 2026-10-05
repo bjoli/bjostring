@@ -14,6 +14,8 @@
 using System.Buffers;
 using System.Diagnostics;
 using System.Numerics;
+using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.Unicode;
 
@@ -33,10 +35,16 @@ namespace BjoString;
 /// byte-level search land on scalar boundaries.
 /// </para>
 /// <para>
-/// A struct around one array, so a string costs one allocation, as a .NET
-/// <c>string</c> does. <c>default</c> is the empty string, which is why every
-/// member reads the array through <see cref="AsSpan()"/> (a null array is an
-/// empty span).
+/// A string is a part of an array: the whole of it for a string that was
+/// built, or the part a slice (<see cref="Slice"/>, <see cref="TrimSlice"/>,
+/// <see cref="SplitSlices"/>) left, sharing the array of the string it was
+/// taken from. A slice keeps that whole array alive, which is why only the
+/// <c>Slice</c> operations share and <see cref="Copy"/> lets go.
+/// <c>default</c> is the empty string.
+/// </para>
+/// <para>
+/// Cursors are offsets into the array, so a cursor found in a slice is a
+/// cursor of the string it was taken from.
 /// </para>
 /// <para>
 /// Order is byte order, which for UTF-8 is scalar order. It differs from
@@ -49,9 +57,23 @@ public readonly partial struct Utf8String :
     IComparisonOperators<Utf8String, Utf8String, bool>
 {
     private readonly byte[]? _bytes;
+    private readonly int _start;
+    private readonly int _length;
 
     /// <summary>Wraps bytes that are valid UTF-8 and that nothing else will write.</summary>
-    internal Utf8String(byte[] bytes) => _bytes = bytes;
+    internal Utf8String(byte[] bytes)
+    {
+        _bytes = bytes;
+        _length = bytes.Length;
+    }
+
+    /// <summary>Part of such bytes, already checked to be in range and on boundaries.</summary>
+    internal Utf8String(byte[]? bytes, int start, int length)
+    {
+        _bytes = bytes;
+        _start = start;
+        _length = length;
+    }
 
     public static Utf8String Empty => default;
 
@@ -115,27 +137,39 @@ public readonly partial struct Utf8String :
     }
 
     /// <summary>The length in bytes: the storage length, not the number of scalars.</summary>
-    // Through the span, as every other member reads the array, so that the JIT
-    // can share the null check between them.
-    public int ByteLength => AsSpan().Length;
+    public int ByteLength => _length;
 
-    public bool IsEmpty => ByteLength == 0;
+    public bool IsEmpty => _length == 0;
 
-    public ReadOnlySpan<byte> AsSpan() => new(_bytes);
+    // Without the span constructor's range check: the bounds were checked
+    // when the string was made, and this is on every path.
+    public ReadOnlySpan<byte> AsSpan() =>
+        _bytes is null
+            ? default
+            : MemoryMarshal.CreateReadOnlySpan(
+                ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_bytes), (nint)(uint)_start), _length);
 
     /// <summary>The bytes between two cursors, the second exclusive.</summary>
-    public ReadOnlySpan<byte> AsSpan(StringCursor start, StringCursor end) =>
-        AsSpan()[start.Offset..end.Offset];
+    public ReadOnlySpan<byte> AsSpan(StringCursor start, StringCursor end)
+    {
+        CheckSpan(start, end, "AsSpan");
+        return new(_bytes, start.Offset, end.Offset - start.Offset);
+    }
 
     /// <summary>The bytes as memory, which is what the regex engine searches.</summary>
-    public ReadOnlyMemory<byte> AsMemory() => new(_bytes);
+    public ReadOnlyMemory<byte> AsMemory() => new(_bytes, _start, _length);
 
-    /// <summary>The whole string as a slice.</summary>
-    public StringSlice AsSlice() => new(this, 0, ByteLength);
+    /// <summary>The whole array the string is part of, which is what cursors index.</summary>
+    internal ReadOnlySpan<byte> Buffer => _bytes;
 
-    public static implicit operator StringSlice(Utf8String s) => s.AsSlice();
+    internal int Start => _start;
 
-    /// <summary>The byte at a byte index: the escape hatch for scanners that work in bytes.</summary>
+    internal int End => _start + _length;
+
+    /// <summary>The cursor at a byte index of <see cref="AsSpan()"/>, which must be on a boundary.</summary>
+    internal StringCursor CursorAt(int index) => new(_start + index);
+
+    /// <summary>The byte at a byte index.</summary>
     public byte ByteAt(int index) => AsSpan()[index];
 
     /// <summary>The number of scalars, counted: O(n), vectorized.</summary>
@@ -143,14 +177,19 @@ public readonly partial struct Utf8String :
 
     public bool IsAscii() => Ascii.IsValid(AsSpan());
 
-    public RuneEnumerator EnumerateRunes() => new(_bytes, 0, ByteLength);
+    public RuneEnumerator EnumerateRunes() => new(_bytes, _start, _start + _length);
+
+    /// <summary>Whether this is all of its array, so that holding it holds nothing more.</summary>
+    public bool IsCompact => _bytes is null || (_start == 0 && _length == _bytes.Length);
+
+    /// <summary>The same text in an array of its own: the string itself when it already is.</summary>
+    public Utf8String Copy() => IsCompact ? this : _length == 0 ? default : new(AsSpan().ToArray());
 
     internal byte[]? Bytes => _bytes;
 
     public bool Equals(Utf8String other) =>
-        ReferenceEquals(_bytes, other._bytes) || AsSpan().SequenceEqual(other.AsSpan());
-
-    public bool Equals(StringSlice other) => AsSpan().SequenceEqual(other.AsSpan());
+        (ReferenceEquals(_bytes, other._bytes) && _start == other._start && _length == other._length)
+        || AsSpan().SequenceEqual(other.AsSpan());
 
     /// <summary>
     /// Whether the text is exactly these bytes. What a match on a string
@@ -159,18 +198,8 @@ public readonly partial struct Utf8String :
     /// </summary>
     public bool ContentEquals(ReadOnlySpan<byte> utf8) => AsSpan().SequenceEqual(utf8);
 
-    /// <summary>
-    /// Equal to a string or a slice with the same text, both ways round, so
-    /// that values compared as <c>object</c> agree with the typed comparison.
-    /// </summary>
-    public override bool Equals(object? obj) => obj switch
-    {
-        Utf8String s => Equals(s),
-        StringSlice s => Equals(s),
-        _ => false,
-    };
+    public override bool Equals(object? obj) => obj is Utf8String s && Equals(s);
 
-    /// <summary>The same as the hash of a <see cref="StringSlice"/> with the same text.</summary>
     public override int GetHashCode() => Utf8Ops.Hash(AsSpan());
 
     public int CompareTo(Utf8String other) => Utf8Ops.Compare(AsSpan(), other.AsSpan());
@@ -190,5 +219,24 @@ public readonly partial struct Utf8String :
     public static bool operator >=(Utf8String a, Utf8String b) => a.CompareTo(b) >= 0;
 
     /// <summary>The text as a .NET (UTF-16) string; allocates.</summary>
-    public override string ToString() => _bytes is null ? "" : Encoding.UTF8.GetString(_bytes);
+    public override string ToString() => Encoding.UTF8.GetString(AsSpan());
+
+    /// <summary>Throws unless both cursors are in this string, on boundaries, and in order.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private void CheckSpan(StringCursor start, StringCursor end, string op)
+    {
+        if (start.Offset > end.Offset)
+        {
+            throw new ArgumentException($"{op}: the start cursor is after the end cursor.", nameof(start));
+        }
+        if (start.Offset < _start || end.Offset > _start + _length)
+        {
+            throw new ArgumentOutOfRangeException(nameof(start), $"{op}: the cursors are outside the string.");
+        }
+        var b = Buffer;
+        if (!Cursors.IsBoundary(b, start.Offset) || !Cursors.IsBoundary(b, end.Offset))
+        {
+            Cursors.ThrowNotBoundary(op);
+        }
+    }
 }

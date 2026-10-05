@@ -38,8 +38,6 @@ public static class Utf8Text
 
     public static void Write(TextWriter writer, Utf8String s) => Write(writer, s.AsSpan());
 
-    public static void Write(TextWriter writer, StringSlice s) => Write(writer, s.AsSpan());
-
     /// <summary>The next line, or null at the end.</summary>
     public static Utf8String? ReadLine(TextReader reader)
     {

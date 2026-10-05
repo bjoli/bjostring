@@ -14,6 +14,7 @@
 using System.Diagnostics.CodeAnalysis;
 using System.Numerics;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 
 namespace BjoString;
@@ -37,8 +38,9 @@ namespace BjoString;
 /// invalid UTF-8 through <see cref="Substring"/>.
 /// </para>
 /// <para>
-/// A <see cref="StringSlice"/> uses the cursors of the string it slices, so
-/// a cursor found in a slice can be used on the whole string.
+/// The offset is into the array the string is part of, so a slice uses the
+/// cursors of the string it was taken from, and a cursor found in a slice can
+/// be used on that string.
 /// </para>
 /// </remarks>
 public readonly record struct StringCursor : IComparable<StringCursor>, IComparisonOperators<StringCursor, StringCursor, bool>
@@ -48,47 +50,34 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
     internal StringCursor(int offset) => Offset = offset;
 
     /// <summary>A cursor on the first scalar.</summary>
-    public static StringCursor Start(Utf8String s) => default;
+    public static StringCursor Start(Utf8String s) => new(s.Start);
 
     /// <summary>The past-the-end cursor, the only one <see cref="AtEnd"/> answers true for.</summary>
-    public static StringCursor End(Utf8String s) => new(s.ByteLength);
+    public static StringCursor End(Utf8String s) => new(s.End);
 
-    public static bool AtEnd(Utf8String s, StringCursor c) => c.Offset >= s.ByteLength;
+    public static bool AtEnd(Utf8String s, StringCursor c) => c.Offset >= s.End;
 
     /// <summary>The scalar at the cursor.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Rune Ref(Utf8String s, StringCursor c)
-    {
-        var b = s.AsSpan();
-        return Cursors.Ref(b, 0, b.Length, c.Offset);
-    }
+    public static Rune Ref(Utf8String s, StringCursor c) => Cursors.Ref(s.Buffer, s.Start, s.End, c.Offset);
 
     /// <summary>The cursor on the next scalar.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static StringCursor Next(Utf8String s, StringCursor c)
-    {
-        var b = s.AsSpan();
-        return new(Cursors.Next(b, 0, b.Length, c.Offset));
-    }
+    public static StringCursor Next(Utf8String s, StringCursor c) =>
+        new(Cursors.Next(s.Buffer, s.Start, s.End, c.Offset));
 
     /// <summary>The cursor on the previous scalar.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static StringCursor Prev(Utf8String s, StringCursor c)
-    {
-        var b = s.AsSpan();
-        return new(Cursors.Prev(b, 0, b.Length, c.Offset));
-    }
+    public static StringCursor Prev(Utf8String s, StringCursor c) =>
+        new(Cursors.Prev(s.Buffer, s.Start, s.End, c.Offset));
 
     /// <summary>
     /// The scalar at the cursor and the cursor after it: one bounds check and
     /// one read of the lead byte for both.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static (Rune, StringCursor) RefNext(Utf8String s, StringCursor c)
-    {
-        var b = s.AsSpan();
-        return Cursors.RefNext(b, 0, b.Length, c.Offset);
-    }
+    public static (Rune, StringCursor) RefNext(Utf8String s, StringCursor c) =>
+        Cursors.RefNext(s.Buffer, s.Start, s.End, c.Offset);
 
     /// <summary>The text between two cursors, the second exclusive.</summary>
     public static Utf8String Substring(Utf8String s, StringCursor start, StringCursor end) =>
@@ -109,11 +98,17 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
 }
 
 /// <summary>
-/// Cursor steps over the bytes <c>[lo, hi)</c> of a string, shared by
-/// <see cref="Utf8String"/> (the whole) and <see cref="StringSlice"/>.
+/// Cursor steps over the bytes <c>[lo, hi)</c> of a string's array.
 /// </summary>
 internal static class Cursors
 {
+    // A read without a range check, for an index the step has just checked
+    // against [lo, hi), which a string's bounds keep inside its array. The
+    // second byte of a two-byte scalar is inside as well: the string is valid
+    // UTF-8 and ends on a boundary.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static byte At(ReadOnlySpan<byte> s, int i) => Unsafe.Add(ref MemoryMarshal.GetReference(s), (nint)(uint)i);
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Rune Ref(ReadOnlySpan<byte> s, int lo, int hi, int i)
     {
@@ -121,14 +116,14 @@ internal static class Cursors
         {
             ThrowOutside("string-cursor-ref", i, hi);
         }
-        uint b = s[i];
+        uint b = At(s, i);
         if (b < 0x80)
         {
             return Unsafe.BitCast<uint, Rune>(b);
         }
         if (b - 0xC2 < 0x1E)
         {
-            return Unsafe.BitCast<uint, Rune>(((b & 0x1F) << 6) | (s[i + 1] & 0x3Fu));
+            return Unsafe.BitCast<uint, Rune>(((b & 0x1F) << 6) | (At(s, i + 1) & 0x3Fu));
         }
         return DecodeAt(s, i, "string-cursor-ref").Rune;
     }
@@ -140,7 +135,7 @@ internal static class Cursors
         {
             ThrowOutside("string-cursor-next", i, hi);
         }
-        byte b = s[i];
+        byte b = At(s, i);
         if (b < 0x80)
         {
             return i + 1;
@@ -158,7 +153,7 @@ internal static class Cursors
             ThrowBeforeStart(i, lo);
         }
         i--;
-        while (i > lo && Utf8Ops.IsContinuation(s[i]))
+        while (i > lo && Utf8Ops.IsContinuation(At(s, i)))
         {
             i--;
         }
@@ -173,14 +168,14 @@ internal static class Cursors
         {
             ThrowOutside("string-cursor-ref+next", i, hi);
         }
-        uint b = s[i];
+        uint b = At(s, i);
         if (b < 0x80)
         {
             return (Unsafe.BitCast<uint, Rune>(b), new(i + 1));
         }
         if (b - 0xC2 < 0x1E)
         {
-            return (Unsafe.BitCast<uint, Rune>(((b & 0x1F) << 6) | (s[i + 1] & 0x3Fu)), new(i + 2));
+            return (Unsafe.BitCast<uint, Rune>(((b & 0x1F) << 6) | (At(s, i + 1) & 0x3Fu)), new(i + 2));
         }
         var (r, width) = DecodeAt(s, i, "string-cursor-ref+next");
         return (r, new(i + width));

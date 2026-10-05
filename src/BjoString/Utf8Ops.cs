@@ -22,10 +22,10 @@ using System.Text.Unicode;
 namespace BjoString;
 
 /// <summary>
-/// The algorithms behind <see cref="Utf8String"/> and <see cref="StringSlice"/>,
-/// on spans of valid UTF-8 so that both types share them. Searching, comparing
-/// and copying go to .NET's vectorized span routines; only what has no such
-/// routine (counting scalars, decoding at a boundary, case and trim) is here.
+/// The algorithms behind <see cref="Utf8String"/>, on spans of valid UTF-8.
+/// Searching, comparing and copying go to .NET's vectorized span routines;
+/// only what has no such routine (counting scalars, decoding at a boundary,
+/// case and trim) is here.
 /// </summary>
 internal static class Utf8Ops
 {

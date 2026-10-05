@@ -55,10 +55,4 @@ public static class Utf8Number
     public static long ParseLong(Utf8String s) => ParseLong(s.AsSpan());
 
     public static double ParseDouble(Utf8String s) => ParseDouble(s.AsSpan());
-
-    public static int ParseInt(StringSlice s) => ParseInt(s.AsSpan());
-
-    public static long ParseLong(StringSlice s) => ParseLong(s.AsSpan());
-
-    public static double ParseDouble(StringSlice s) => ParseDouble(s.AsSpan());
 }

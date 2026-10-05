@@ -79,7 +79,6 @@ public sealed class Utf8StringBuilder
 
     public Utf8StringBuilder Append(Utf8String s) => AppendValid(s.AsSpan());
 
-    public Utf8StringBuilder Append(StringSlice s) => AppendValid(s.AsSpan());
 
     /// <summary>Appends UTF-8 bytes, which must be valid.</summary>
     public Utf8StringBuilder AppendUtf8(ReadOnlySpan<byte> utf8)

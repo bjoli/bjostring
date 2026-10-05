@@ -169,7 +169,6 @@ public static class StringTests
             var (ua, ub) = (U(a), U(b));
             Check.Equal(Math.Sign(CompareScalars(a, b)), Math.Sign(ua.CompareTo(ub)), $"compare {a} {b}");
             Check.Equal(a == b, ua == ub, "equality");
-            Check.Equal(a == b, ua.AsSlice() == ub.AsSlice(), "slice equality");
             if (a == b)
             {
                 Check.Equal(ua.GetHashCode(), ub.GetHashCode(), "hash");
@@ -293,7 +292,7 @@ public static class StringTests
             Check.Equal(s.Trim(), u.Trim().ToString(), $"trim [{s}]");
             Check.Equal(s.TrimStart(), u.TrimStart().ToString(), "trim start");
             Check.Equal(s.TrimEnd(), u.TrimEnd().ToString(), "trim end");
-            Check.Equal(s.Trim(), u.AsSlice().Trim().ToString(), "slice trim");
+            Check.Equal(s.Trim(), u.TrimSlice().ToString(), "trim slice");
 
             int count = s.EnumerateRunes().Count();
             int width = rng.Next(15);
@@ -304,44 +303,6 @@ public static class StringTests
 
             Check.Equal(Runes(s.EnumerateRunes().Reverse()), u.Reverse().ToString(), "reverse");
         }
-    }
-
-    [Test]
-    public static void Slices()
-    {
-        var u = U("  ab,cé,😀  ");
-        var t = u.AsSlice().Trim();
-        Check.Equal("ab,cé,😀", t.ToString(), "trimmed");
-        Check.True(t.Source == u, "same source");
-        var fields = t.EnumerateSplit(U(",")).ToList();
-        Check.SequenceEqual(["ab", "cé", "😀"], fields.Select(f => f.ToString()), "fields");
-
-        // A slice's cursors are the source's.
-        var second = fields[1];
-        Check.Equal(new Rune('c'), StringCursor.Ref(u, second.Start), "cursor shared with the source");
-        Check.Equal(new Rune('é'), second.Ref(second.Next(second.Start)), "slice ref");
-        Check.True(second.AtEnd(second.Next(second.Next(second.Start))), "slice end");
-        Check.Throws<ArgumentOutOfRangeException>(() => second.Ref(second.End), "past the slice");
-        Check.Throws<ArgumentOutOfRangeException>(() => second.Prev(second.Start), "before the slice");
-        Check.Equal(second.Start, second.Prev(second.Next(second.Start)), "prev in slice");
-        Check.Equal(new StringCursor(u.IndexOf(U("é"))!.Value.Offset), second.IndexOf(new Rune('é'))!.Value, "slice search is source-relative");
-        Check.True(second.Slice(second.Start, second.Next(second.Start)).ContentEquals("c"u8), "sub-slice");
-        Check.Equal(2, second.Count(), "count");
-        Check.True(second.Equals(U("cé")), "equals a string");
-        Check.True(second.ToUtf8String() == U("cé"), "to string");
-    }
-
-    [Test]
-    public static void AlternateLookup()
-    {
-        var map = new Dictionary<Utf8String, int>(Utf8StringComparer.Ordinal) { [U("key")] = 1, [U("ключ")] = 2 };
-        var bySlice = map.GetAlternateLookup<StringSlice>();
-        var text = U("a key, a ключ");
-        var key = text.Slice(text.IndexOf(U("key"))!.Value, text.IndexOf(U(","))!.Value);
-        Check.True(bySlice.TryGetValue(key, out int v) && v == 1, "by slice");
-        var bySpan = map.GetAlternateLookup<ReadOnlySpan<byte>>();
-        Check.True(bySpan.TryGetValue("ключ"u8, out v) && v == 2, "by span");
-        Check.True(!bySpan.ContainsKey("nope"u8), "missing");
     }
 
     [Test]

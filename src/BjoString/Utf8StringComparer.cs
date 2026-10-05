@@ -14,14 +14,14 @@
 namespace BjoString;
 
 /// <summary>
-/// Ordinal equality and order of strings, with alternate lookups so that a
-/// <c>Dictionary</c> or <c>HashSet</c> keyed by strings can be probed with a
-/// slice or raw UTF-8 bytes without making a string first
-/// (<c>GetAlternateLookup&lt;StringSlice&gt;()</c>).
+/// Ordinal equality and order of strings, with an alternate lookup so that a
+/// <c>Dictionary</c> or <c>HashSet</c> keyed by strings can be probed with raw
+/// UTF-8 bytes without making a string first
+/// (<c>GetAlternateLookup&lt;ReadOnlySpan&lt;byte&gt;&gt;()</c>). A slice is a
+/// string, so it needs none.
 /// </summary>
 public sealed class Utf8StringComparer :
     IEqualityComparer<Utf8String>, IComparer<Utf8String>,
-    IAlternateEqualityComparer<StringSlice, Utf8String>,
     IAlternateEqualityComparer<ReadOnlySpan<byte>, Utf8String>
 {
     public static Utf8StringComparer Ordinal { get; } = new();
@@ -33,12 +33,6 @@ public sealed class Utf8StringComparer :
     public int GetHashCode(Utf8String obj) => obj.GetHashCode();
 
     public int Compare(Utf8String x, Utf8String y) => x.CompareTo(y);
-
-    public bool Equals(StringSlice alternate, Utf8String other) => alternate.Equals(other);
-
-    public int GetHashCode(StringSlice alternate) => alternate.GetHashCode();
-
-    public Utf8String Create(StringSlice alternate) => alternate.ToUtf8String();
 
     public bool Equals(ReadOnlySpan<byte> alternate, Utf8String other) => other.ContentEquals(alternate);
 
