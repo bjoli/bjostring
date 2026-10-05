@@ -38,11 +38,11 @@ public readonly partial struct Utf8String
     /// <summary>The first occurrence at or after <paramref name="from"/>, or null.</summary>
     public StringCursor? IndexOf(Utf8String needle, StringCursor from)
     {
-        if (from.Offset < _start || from.Offset > End)
+        if (from.Offset < Start || from.Offset > End)
         {
             throw new ArgumentOutOfRangeException(nameof(from), "The cursor is outside the string.");
         }
-        int i = Buffer[from.Offset..End].IndexOf(needle.AsSpan());
+        int i = new ReadOnlySpan<byte>(Bytes, from.Offset, End - from.Offset).IndexOf(needle.AsSpan());
         return i < 0 ? null : new StringCursor(from.Offset + i);
     }
 
@@ -69,34 +69,49 @@ public readonly partial struct Utf8String
     public Utf8String Slice(StringCursor start, StringCursor end)
     {
         CheckSpan(start, end, "substring");
-        return new(_bytes, start.Offset, end.Offset - start.Offset);
+        return new(Bytes, start.Offset, end.Offset - start.Offset);
     }
 
     /// <summary>The text between two cursors, the second exclusive; the string itself if that is all of it.</summary>
-    public Utf8String Substring(StringCursor start, StringCursor end) => Slice(start, end).CopyUnlessAll(this);
+    public Utf8String Substring(StringCursor start, StringCursor end)
+    {
+        CheckSpan(start, end, "substring");
+        int at = Start;
+        return CopyOf(start.Offset - at, end.Offset - at);
+    }
 
-    /// <summary>A part of this string as its own string, unless the part is all of it.</summary>
-    private Utf8String CopyUnlessAll(Utf8String whole) =>
-        _start == whole._start && _length == whole._length ? whole : Copy();
+    /// <summary>
+    /// The bytes <c>[lo, hi)</c> of <see cref="AsSpan()"/> as a string of their
+    /// own, or this string when that is all of it: what a copying operation
+    /// answers without making the slice it would copy.
+    /// </summary>
+    private Utf8String CopyOf(int lo, int hi)
+    {
+        var span = AsSpan();
+        if (lo == 0 && hi == span.Length) return this;
+        return lo == hi ? default : new(span[lo..hi].ToArray());
+    }
 
     public static Utf8String Concat(Utf8String a, Utf8String b)
     {
-        if (a.IsEmpty) return b;
-        if (b.IsEmpty) return a;
-        var r = new byte[checked(a.ByteLength + b.ByteLength)];
-        a.AsSpan().CopyTo(r);
-        b.AsSpan().CopyTo(r.AsSpan(a.ByteLength));
+        ReadOnlySpan<byte> sa = a.AsSpan(), sb = b.AsSpan();
+        if (sa.IsEmpty) return b;
+        if (sb.IsEmpty) return a;
+        var r = new byte[checked(sa.Length + sb.Length)];
+        sa.CopyTo(r);
+        sb.CopyTo(r.AsSpan(sa.Length));
         return new(r);
     }
 
     public static Utf8String Concat(Utf8String a, Utf8String b, Utf8String c)
     {
-        if (a.IsEmpty) return Concat(b, c);
-        if (c.IsEmpty) return Concat(a, b);
-        var r = new byte[checked(a.ByteLength + b.ByteLength + c.ByteLength)];
-        a.AsSpan().CopyTo(r);
-        b.AsSpan().CopyTo(r.AsSpan(a.ByteLength));
-        c.AsSpan().CopyTo(r.AsSpan(a.ByteLength + b.ByteLength));
+        ReadOnlySpan<byte> sa = a.AsSpan(), sb = b.AsSpan(), sc = c.AsSpan();
+        if (sa.IsEmpty) return Concat(b, c);
+        if (sc.IsEmpty) return Concat(a, b);
+        var r = new byte[checked(sa.Length + sb.Length + sc.Length)];
+        sa.CopyTo(r);
+        sb.CopyTo(r.AsSpan(sa.Length));
+        sc.CopyTo(r.AsSpan(sa.Length + sb.Length));
         return new(r);
     }
 
@@ -108,8 +123,8 @@ public readonly partial struct Utf8String
         Utf8String last = default;
         foreach (var p in parts)
         {
-            length = checked(length + p._length);
-            if (p._length > 0)
+            length = checked(length + p.ByteLength);
+            if (!p.IsEmpty)
             {
                 nonEmpty++;
                 last = p;
@@ -122,7 +137,7 @@ public readonly partial struct Utf8String
         foreach (var p in parts)
         {
             p.AsSpan().CopyTo(r.AsSpan(at));
-            at += p._length;
+            at += p.ByteLength;
         }
         return new(r);
     }
@@ -141,7 +156,7 @@ public readonly partial struct Utf8String
         int length = checked(sep.Length * (parts.Length - 1));
         foreach (var p in parts)
         {
-            length = checked(length + p._length);
+            length = checked(length + p.ByteLength);
         }
         if (length == 0) return default;
         var r = new byte[length];
@@ -154,7 +169,7 @@ public readonly partial struct Utf8String
                 at += sep.Length;
             }
             parts[i].AsSpan().CopyTo(r.AsSpan(at));
-            at += parts[i]._length;
+            at += parts[i].ByteLength;
         }
         return new(r);
     }
@@ -187,11 +202,14 @@ public readonly partial struct Utf8String
     {
         var sep = separator.AsSpan();
         if (sep.IsEmpty) return [this];
-        var fields = new Utf8String[AsSpan().Count(sep) + 1];
-        int n = 0;
-        foreach (var field in EnumerateSplit(separator))
+        var text = AsSpan();
+        var fields = new Utf8String[text.Count(sep) + 1];
+        int at = 0;
+        for (int n = 0; n < fields.Length; n++)
         {
-            fields[n++] = share ? field : field.CopyUnlessAll(this);
+            int k = n == fields.Length - 1 ? text.Length - at : text[at..].IndexOf(sep);
+            fields[n] = share ? new(Bytes, Start + at, k) : CopyOf(at, at + k);
+            at += k + sep.Length;
         }
         return fields;
     }
@@ -214,11 +232,17 @@ public readonly partial struct Utf8String
     }
 
     /// <summary>White space (<see cref="Rune.IsWhiteSpace"/>) removed from both ends.</summary>
-    public Utf8String Trim() => TrimSlice().CopyUnlessAll(this);
+    public Utf8String Trim() => TrimCopy(start: true, end: true);
 
-    public Utf8String TrimStart() => TrimStartSlice().CopyUnlessAll(this);
+    public Utf8String TrimStart() => TrimCopy(start: true, end: false);
 
-    public Utf8String TrimEnd() => TrimEndSlice().CopyUnlessAll(this);
+    public Utf8String TrimEnd() => TrimCopy(start: false, end: true);
+
+    private Utf8String TrimCopy(bool start, bool end)
+    {
+        var (lo, hi) = Utf8Ops.TrimBounds(AsSpan(), start, end);
+        return CopyOf(lo, hi);
+    }
 
     /// <summary>What <see cref="Trim"/> leaves, sharing this string's array.</summary>
     public Utf8String TrimSlice() => Trimmed(start: true, end: true);
@@ -230,7 +254,7 @@ public readonly partial struct Utf8String
     private Utf8String Trimmed(bool start, bool end)
     {
         var (lo, hi) = Utf8Ops.TrimBounds(AsSpan(), start, end);
-        return new(_bytes, _start + lo, hi - lo);
+        return lo == 0 && hi == ByteLength ? this : new(Bytes, Start + lo, hi - lo);
     }
 
     /// <summary>Padded on the left with <paramref name="pad"/> to <paramref name="width"/> scalars.</summary>
@@ -263,5 +287,5 @@ public readonly partial struct Utf8String
     }
 
     /// <summary>The scalars in reverse order.</summary>
-    public Utf8String Reverse() => _length <= 1 ? this : new(Utf8Ops.Reverse(AsSpan()));
+    public Utf8String Reverse() => ByteLength <= 1 ? this : new(Utf8Ops.Reverse(AsSpan()));
 }

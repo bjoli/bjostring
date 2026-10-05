@@ -43,6 +43,12 @@ namespace BjoString;
 /// <c>default</c> is the empty string.
 /// </para>
 /// <para>
+/// The one field is the array itself when the string is all of it, and a
+/// <see cref="Part"/> otherwise. A string is therefore the size of a
+/// reference, as a .NET string is, and only a slice pays for its bounds: an
+/// allocation when it is made, and a type test when it is read.
+/// </para>
+/// <para>
 /// Cursors are offsets into the array, so a cursor found in a slice is a
 /// cursor of the string it was taken from.
 /// </para>
@@ -56,24 +62,44 @@ public readonly partial struct Utf8String :
     IEquatable<Utf8String>, IComparable<Utf8String>, IComparable,
     IComparisonOperators<Utf8String, Utf8String, bool>
 {
-    private readonly byte[]? _bytes;
-    private readonly int _start;
-    private readonly int _length;
+    /// <summary>The bounds of a slice in the array it shares.</summary>
+    ///
+    /// <remarks>
+    /// <see cref="End"/> is laid out where an array keeps its length, the first
+    /// word after the object's type, so that <see cref="EndOf"/> reads the end
+    /// of either kind of string with one load and no type test.
+    /// </remarks>
+    [StructLayout(LayoutKind.Explicit)]
+    internal sealed class Part(byte[] bytes, int start, int length)
+    {
+        [FieldOffset(0)] public readonly int End = start + length;
+        [FieldOffset(4)] public readonly int Start = start;
+        [FieldOffset(8)] public readonly byte[] Bytes = bytes;
+
+        public int Length => End - Start;
+    }
+
+    /// <summary>The first field of an object, which for an array is its length.</summary>
+    private sealed class FirstInt
+    {
+#pragma warning disable CS0649 // Never written: only ever read through another object.
+        public int Value;
+#pragma warning restore CS0649
+    }
+
+    /// <summary>The past-the-end offset of a string with this data: the array's length or the part's end.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static int EndOf(object? data) => data is null ? 0 : Unsafe.As<FirstInt>(data).Value;
+
+    /// <summary>A <c>byte[]</c>, a <see cref="Part"/>, or null for the empty string.</summary>
+    private readonly object? _data;
 
     /// <summary>Wraps bytes that are valid UTF-8 and that nothing else will write.</summary>
-    internal Utf8String(byte[] bytes)
-    {
-        _bytes = bytes;
-        _length = bytes.Length;
-    }
+    internal Utf8String(byte[] bytes) => _data = bytes;
 
     /// <summary>Part of such bytes, already checked to be in range and on boundaries.</summary>
-    internal Utf8String(byte[]? bytes, int start, int length)
-    {
-        _bytes = bytes;
-        _start = start;
-        _length = length;
-    }
+    internal Utf8String(byte[]? bytes, int start, int length) =>
+        _data = bytes is null || (start == 0 && length == bytes.Length) ? bytes : new Part(bytes, start, length);
 
     public static Utf8String Empty => default;
 
@@ -136,38 +162,79 @@ public readonly partial struct Utf8String :
         return new(bytes);
     }
 
-    /// <summary>The length in bytes: the storage length, not the number of scalars.</summary>
-    public int ByteLength => _length;
+    /// <summary>
+    /// The array, when the string is all of one: the path every member takes
+    /// first. An exact type test, which is one compare where <c>is byte[]</c>
+    /// would also have to admit an <c>sbyte[]</c>.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool IsWhole(object? data) => data is not null && data.GetType() == typeof(byte[]);
 
-    public bool IsEmpty => _length == 0;
+    internal object? Data => _data;
+
+    /// <summary>The length in bytes: the storage length, not the number of scalars.</summary>
+    public int ByteLength => IsWhole(_data) ? Unsafe.As<byte[]>(_data)!.Length : PartLength(_data);
+
+    private static int PartLength(object? data) => data is Part p ? p.Length : 0;
+
+    public bool IsEmpty => ByteLength == 0;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<byte> AsSpan() => IsWhole(_data) ? Unsafe.As<byte[]>(_data) : PartSpan(_data);
 
     // Without the span constructor's range check: the bounds were checked
-    // when the string was made, and this is on every path.
-    public ReadOnlySpan<byte> AsSpan() =>
-        _bytes is null
-            ? default
-            : MemoryMarshal.CreateReadOnlySpan(
-                ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(_bytes), (nint)(uint)_start), _length);
+    // when the slice was made.
+    private static ReadOnlySpan<byte> PartSpan(object? data) =>
+        data is Part p
+            ? MemoryMarshal.CreateReadOnlySpan(
+                ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(p.Bytes), (nint)(uint)p.Start), p.Length)
+            : default;
 
     /// <summary>The bytes between two cursors, the second exclusive.</summary>
     public ReadOnlySpan<byte> AsSpan(StringCursor start, StringCursor end)
     {
         CheckSpan(start, end, "AsSpan");
-        return new(_bytes, start.Offset, end.Offset - start.Offset);
+        return new(Bytes, start.Offset, end.Offset - start.Offset);
     }
 
     /// <summary>The bytes as memory, which is what the regex engine searches.</summary>
-    public ReadOnlyMemory<byte> AsMemory() => new(_bytes, _start, _length);
+    public ReadOnlyMemory<byte> AsMemory() => new(Bytes, Start, ByteLength);
 
-    /// <summary>The whole array the string is part of, which is what cursors index.</summary>
-    internal ReadOnlySpan<byte> Buffer => _bytes;
+    /// <summary>
+    /// The whole array the string is part of, which is what cursors index,
+    /// and the string's bounds in it. Returned rather than given through
+    /// <c>out</c>, and never through a call that takes the string's address,
+    /// either of which would keep a loop's string and bounds in memory.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal Bounds GetBounds()
+    {
+        if (IsWhole(_data))
+        {
+            var b = Unsafe.As<byte[]>(_data)!;
+            return new(b, 0, b.Length);
+        }
+        return PartBounds(_data);
+    }
 
-    internal int Start => _start;
+    internal static Bounds PartBounds(object? data) =>
+        data is Part p ? new(p.Bytes, p.Start, p.End) : default;
 
-    internal int End => _start + _length;
+    internal readonly struct Bounds(byte[]? bytes, int lo, int hi)
+    {
+        public readonly byte[]? Bytes = bytes;
+        public readonly int Lo = lo;
+        public readonly int Hi = hi;
+    }
+
+    internal byte[]? Bytes => _data is Part p ? p.Bytes : Unsafe.As<byte[]?>(_data);
+
+    internal int Start => _data is Part p ? p.Start : 0;
+
+    internal int End => EndOf(_data);
 
     /// <summary>The cursor at a byte index of <see cref="AsSpan()"/>, which must be on a boundary.</summary>
-    internal StringCursor CursorAt(int index) => new(_start + index);
+    internal StringCursor CursorAt(int index) => new(Start + index);
 
     /// <summary>The byte at a byte index.</summary>
     public byte ByteAt(int index) => AsSpan()[index];
@@ -177,19 +244,16 @@ public readonly partial struct Utf8String :
 
     public bool IsAscii() => Ascii.IsValid(AsSpan());
 
-    public RuneEnumerator EnumerateRunes() => new(_bytes, _start, _start + _length);
+    public RuneEnumerator EnumerateRunes() => new(Bytes, Start, End);
 
     /// <summary>Whether this is all of its array, so that holding it holds nothing more.</summary>
-    public bool IsCompact => _bytes is null || (_start == 0 && _length == _bytes.Length);
+    public bool IsCompact => _data is not Part;
 
     /// <summary>The same text in an array of its own: the string itself when it already is.</summary>
-    public Utf8String Copy() => IsCompact ? this : _length == 0 ? default : new(AsSpan().ToArray());
-
-    internal byte[]? Bytes => _bytes;
+    public Utf8String Copy() => IsCompact ? this : IsEmpty ? default : new(AsSpan().ToArray());
 
     public bool Equals(Utf8String other) =>
-        (ReferenceEquals(_bytes, other._bytes) && _start == other._start && _length == other._length)
-        || AsSpan().SequenceEqual(other.AsSpan());
+        ReferenceEquals(_data, other._data) || AsSpan().SequenceEqual(other.AsSpan());
 
     /// <summary>
     /// Whether the text is exactly these bytes. What a match on a string
@@ -229,11 +293,12 @@ public readonly partial struct Utf8String :
         {
             throw new ArgumentException($"{op}: the start cursor is after the end cursor.", nameof(start));
         }
-        if (start.Offset < _start || end.Offset > _start + _length)
+        var bounds = GetBounds();
+        if (start.Offset < bounds.Lo || end.Offset > bounds.Hi)
         {
             throw new ArgumentOutOfRangeException(nameof(start), $"{op}: the cursors are outside the string.");
         }
-        var b = Buffer;
+        ReadOnlySpan<byte> b = bounds.Bytes;
         if (!Cursors.IsBoundary(b, start.Offset) || !Cursors.IsBoundary(b, end.Offset))
         {
             Cursors.ThrowNotBoundary(op);

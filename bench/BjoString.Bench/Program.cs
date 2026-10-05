@@ -58,6 +58,11 @@ var asciiUtf8 = Utf8String.FromUtf16(asciiText);
 Run("cursor walk, ASCII only", "MB/s", asciiUtf8.ByteLength,
     () => Utf16Walk(asciiText),
     () => Utf8Walk(asciiUtf8));
+// All of the corpus but its first character, so a slice of the whole.
+var uSlice = u.Slice(StringCursor.Next(u, StringCursor.Start(u)), StringCursor.End(u));
+Run("cursor walk, a slice", "MB/s", uSlice.ByteLength,
+    () => Utf16Walk(text),
+    () => Utf8Walk(uSlice));
 // Cyrillic letters, so most scalars take two bytes.
 var cyrText = new string(asciiText.Select(ch => ch is >= 'a' and <= 'z' ? (char)('а' + (ch - 'a')) : ch).ToArray());
 var cyrUtf8 = Utf8String.FromUtf16(cyrText);
@@ -68,7 +73,7 @@ var nl = Utf8String.FromUtf16("\n");
 Run("split on newline", "MB/s", u.ByteLength,
     () => text.Split("\n").Length,
     () => u.Split(nl).Length);
-Run("split enumerator (no allocation)", "MB/s", u.ByteLength,
+Run("split enumerator (slices)", "MB/s", u.ByteLength,
     () => text.Split("\n").Length,
     () => { int n = 0; foreach (var _ in u.EnumerateSplit(nl)) n++; return n; });
 var the = Utf8String.FromUtf16("the");

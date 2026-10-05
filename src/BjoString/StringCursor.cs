@@ -55,29 +55,74 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
     /// <summary>The past-the-end cursor, the only one <see cref="AtEnd"/> answers true for.</summary>
     public static StringCursor End(Utf8String s) => new(s.End);
 
-    public static bool AtEnd(Utf8String s, StringCursor c) => c.Offset >= s.End;
+    // Each step takes a string that is all of its array inline, as the loops
+    // that call it want, and a slice out of line, so that a loop over the
+    // first carries no code for the second.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool AtEnd(Utf8String s, StringCursor c) => c.Offset >= Utf8String.EndOf(s.Data);
 
     /// <summary>The scalar at the cursor.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static Rune Ref(Utf8String s, StringCursor c) => Cursors.Ref(s.Buffer, s.Start, s.End, c.Offset);
+    public static Rune Ref(Utf8String s, StringCursor c)
+    {
+        var d = s.Data;
+        if (Utf8String.IsWhole(d))
+        {
+            var a = Unsafe.As<byte[]>(d)!;
+            return Cursors.Ref(a, 0, a.Length, c.Offset);
+        }
+        return RefPart(d, c);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static Rune RefPart(object? d, StringCursor c) =>
+        d is Utf8String.Part p ? Cursors.Ref(p.Bytes, p.Start, p.End, c.Offset) : Cursors.Ref(default, 0, 0, c.Offset);
 
     /// <summary>The cursor on the next scalar.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static StringCursor Next(Utf8String s, StringCursor c) =>
-        new(Cursors.Next(s.Buffer, s.Start, s.End, c.Offset));
+    public static StringCursor Next(Utf8String s, StringCursor c)
+    {
+        var d = s.Data;
+        if (Utf8String.IsWhole(d))
+        {
+            var a = Unsafe.As<byte[]>(d)!;
+            return new(Cursors.Next(a, 0, a.Length, c.Offset));
+        }
+        return NextPart(d, c);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static StringCursor NextPart(object? d, StringCursor c) =>
+        new(d is Utf8String.Part p ? Cursors.Next(p.Bytes, p.Start, p.End, c.Offset) : Cursors.Next(default, 0, 0, c.Offset));
 
     /// <summary>The cursor on the previous scalar.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static StringCursor Prev(Utf8String s, StringCursor c) =>
-        new(Cursors.Prev(s.Buffer, s.Start, s.End, c.Offset));
+    public static StringCursor Prev(Utf8String s, StringCursor c)
+    {
+        var b = s.GetBounds();
+        return new(Cursors.Prev(b.Bytes, b.Lo, b.Hi, c.Offset));
+    }
 
     /// <summary>
     /// The scalar at the cursor and the cursor after it: one bounds check and
     /// one read of the lead byte for both.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public static (Rune, StringCursor) RefNext(Utf8String s, StringCursor c) =>
-        Cursors.RefNext(s.Buffer, s.Start, s.End, c.Offset);
+    public static (Rune, StringCursor) RefNext(Utf8String s, StringCursor c)
+    {
+        var d = s.Data;
+        if (Utf8String.IsWhole(d))
+        {
+            var a = Unsafe.As<byte[]>(d)!;
+            return Cursors.RefNext(a, 0, a.Length, c.Offset);
+        }
+        return RefNextPart(d, c);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static (Rune, StringCursor) RefNextPart(object? d, StringCursor c) =>
+        d is Utf8String.Part p ? Cursors.RefNext(p.Bytes, p.Start, p.End, c.Offset) : Cursors.RefNext(default, 0, 0, c.Offset);
 
     /// <summary>The text between two cursors, the second exclusive.</summary>
     public static Utf8String Substring(Utf8String s, StringCursor start, StringCursor end) =>
