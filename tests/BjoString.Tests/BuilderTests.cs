@@ -76,6 +76,110 @@ public static class BuilderTests
         }
     }
 
+    // Past Utf8StringBuilder.ChunkSize the text is in several buffers. Every
+    // append, every read and every result has to give what one buffer gave,
+    // whichever buffer a piece of text landed in and wherever a boundary falls.
+    [Test]
+    public static void LongBuildsAcrossBuffers()
+    {
+        var rng = new Random(24);
+        for (int i = 0; i < 12; i++)
+        {
+            var expected = new StringBuilder();
+            var b = new Utf8StringBuilder(rng.Next(1, 40));
+            int target = rng.Next(Utf8StringBuilder.ChunkSize / 2, Utf8StringBuilder.ChunkSize * 5);
+            while (b.ByteLength < target)
+            {
+                string s = Text(rng, rng.Next(2) == 0 ? 5 : 3000);
+                switch (rng.Next(7))
+                {
+                    case 0:
+                        expected.Append(s);
+                        b.Append(U(s));
+                        break;
+                    case 1:
+                        foreach (var r in s.EnumerateRunes())
+                        {
+                            expected.Append(r.ToString());
+                            b.Append(r);
+                        }
+                        break;
+                    case 2:
+                        expected.Append(s);
+                        b.Append(s);
+                        break;
+                    case 3:
+                        long n = rng.NextInt64(long.MinValue, long.MaxValue);
+                        expected.Append(n.ToString(CultureInfo.InvariantCulture));
+                        b.Append(n);
+                        break;
+                    case 4:
+                        expected.Append(s);
+                        foreach (byte x in Encoding.UTF8.GetBytes(s)) b.AppendByte(x);
+                        break;
+                    case 5:
+                        expected.Append(s);
+                        foreach (char unit in s) b.AppendUtf16Unit(unit);
+                        break;
+                    default:
+                        expected.Append(s);
+                        b.AppendUtf8(Encoding.UTF8.GetBytes(s));
+                        break;
+                }
+            }
+            string text = expected.ToString();
+            byte[] utf8 = Encoding.UTF8.GetBytes(text);
+            Check.Equal(utf8.Length, b.ByteLength, "byte length");
+            for (int k = 0; k < 200; k++)
+            {
+                int at = rng.Next(utf8.Length);
+                Check.Equal(utf8[at], b.ByteAt(at), $"byte at {at}");
+            }
+            Check.Equal(utf8[^1], b.ByteAt(utf8.Length - 1), "last byte");
+            Check.Equal(utf8[0], b.ByteAt(0), "first byte");
+            Check.Throws<ArgumentOutOfRangeException>(() => b.ByteAt(utf8.Length), "byte past the end");
+            Check.Equal(text, b.ToUtf8String().ToString(), "built");
+            Check.Equal(text, b.ToString(), "ToString");
+            Check.True(b.AsSpan().SequenceEqual(utf8), "as one span");
+            // Appending after the text was made one buffer again.
+            b.Append(U("tail"));
+            Check.Equal(text + "tail", b.ToUtf8String().ToString(), "appended after AsSpan");
+            b.Clear();
+            Check.Equal(0, b.ByteLength, "cleared");
+            b.Append(U("again"));
+            Check.Equal("again", b.ToUtf8String().ToString(), "reused after Clear");
+        }
+    }
+
+    [Test]
+    public static void BoundariesInsideScalars()
+    {
+        int size = Utf8StringBuilder.ChunkSize;
+        // A raw two-byte scalar whose bytes fall in two buffers, then one left
+        // half done there.
+        var b = new Utf8StringBuilder();
+        b.Append(new string('a', size - 1));
+        b.AppendByte(0xC3).AppendByte(0xA9);
+        Check.Equal(new string('a', size - 1) + "é", b.ToUtf8String().ToString(), "raw scalar across buffers");
+        b.Clear();
+        b.Append(new string('a', size - 1));
+        b.AppendByte(0xC3).Append(U("x"));
+        Check.Throws<InvalidOperationException>(() => b.ToUtf8String(), "raw half scalar across buffers");
+        // A four-byte scalar and a surrogate pair at every offset near a boundary.
+        for (int pad = size - 5; pad <= size + 1; pad++)
+        {
+            var s = new Utf8StringBuilder();
+            s.Append(new string('b', pad));
+            s.Append(new Rune(0x1F600));
+            s.AppendUtf16Unit('\uD83D').AppendUtf16Unit('\uDE00');
+            Check.Equal(new string('b', pad) + "😀😀", s.ToUtf8String().ToString(), $"scalars after {pad}");
+        }
+        // One append larger than a buffer, of each kind.
+        string big = new string('c', size * 3 + 7) + "é";
+        Check.Equal(big, new Utf8StringBuilder().Append(U("x")).Append(U(big)).ToUtf8String().ToString()[1..], "large text");
+        Check.Equal(big, new Utf8StringBuilder().Append(new string('x', size)).Append(big).ToUtf8String().ToString()[size..], "large UTF-16");
+    }
+
     [Test]
     public static void RawBytesAreCheckedAtTheEnd()
     {

@@ -11,7 +11,9 @@
  * availability requirements or notice obligations of Section 3 of the MPL 2.0.
  */
 
+using System.Buffers;
 using System.Globalization;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Text.Unicode;
 
@@ -23,62 +25,125 @@ namespace BjoString;
 /// </summary>
 ///
 /// <remarks>
+/// <para>
 /// Appends of strings, slices and scalars are valid by construction.
 /// <see cref="AppendByte"/> is the exception, for scanners that copy input a
 /// byte at a time: such bytes are only checked by <see cref="ToUtf8String"/>,
 /// which throws if they did not form whole scalars.
+/// </para>
+/// <para>
+/// The text is held in one buffer while it is short, which doubles as it
+/// grows, up to <see cref="ChunkSize"/>. Past that, a full buffer is kept as a
+/// chunk and a new one is started, so that what was written is never copied
+/// again until the string is made, and every buffer stays below the size of
+/// the large object heap. Doubling one array instead copied a 125 MB text
+/// eighteen times over into arrays the collector had to find new memory for.
+/// </para>
 /// </remarks>
 public sealed class Utf8StringBuilder
 {
+    /// <summary>The size of a buffer once the text has outgrown one, below the
+    /// 85,000 bytes at which .NET puts an array on the large object heap.</summary>
+    public const int ChunkSize = 64 * 1024;
+
+    // The buffer being written, and how much of it is written.
     private byte[] _buffer;
     private int _length;
+
+    // The full buffers before it, made when the first one is kept, so that a
+    // short builder is three fields and no larger than it was.
+    private Chunks? _more;
+
     // Where the unchecked bytes start, or -1 when every byte was checked.
     private int _unchecked = -1;
 
     public Utf8StringBuilder() : this(16) { }
 
-    public Utf8StringBuilder(int capacity) => _buffer = new byte[Math.Max(capacity, 1)];
+    public Utf8StringBuilder(int capacity) => _buffer = new byte[Math.Clamp(capacity, 1, Array.MaxLength)];
 
-    public int ByteLength => _length;
+    public int ByteLength => _more is null ? _length : _more.Prefix + _length;
+
+    // The buffers before the one being written, oldest first, and the byte
+    // offset at which each ends: buffer i holds the bytes from Ends[i-1] (0 for
+    // the first) to Ends[i]. Prefix is the bytes before the one being written,
+    // the last of Ends, and 0 when there are none.
+    private sealed class Chunks
+    {
+        public byte[][] Buffers = new byte[8][];
+        public int[] Ends = new int[8];
+        public int Count;
+        public int Prefix;
+    }
 
     /// <summary>The byte at a byte index, for scanners that look back at what they wrote.</summary>
     public byte ByteAt(int index)
     {
-        if ((uint)index >= (uint)_length)
+        int inBuffer = _more is null ? index : index - _more.Prefix;
+        if ((uint)inBuffer < (uint)_length)
+        {
+            return _buffer[inBuffer];
+        }
+        return ByteInChunk(index);
+    }
+
+    private byte ByteInChunk(int index)
+    {
+        var more = _more;
+        if (more is null || (uint)index >= (uint)more.Prefix)
         {
             throw new ArgumentOutOfRangeException(nameof(index));
         }
-        return _buffer[index];
-    }
-
-    /// <summary>The bytes so far, valid until the next append; for parsing a number in place.</summary>
-    public ReadOnlySpan<byte> AsSpan() => _buffer.AsSpan(0, _length);
-
-    private Span<byte> Reserve(int n)
-    {
-        if (_buffer.Length - _length < n)
+        // The first buffer whose end is past the index.
+        int lo = 0, hi = more.Count - 1;
+        while (lo < hi)
         {
-            Array.Resize(ref _buffer, Math.Max(_buffer.Length * 2, checked(_length + n)));
+            int mid = (lo + hi) >>> 1;
+            if (more.Ends[mid] > index) hi = mid; else lo = mid + 1;
         }
-        return _buffer.AsSpan(_length);
+        int start = lo == 0 ? 0 : more.Ends[lo - 1];
+        return more.Buffers[lo][index - start];
     }
+
+    /// <summary>
+    /// The bytes so far, valid until the next append; for parsing a number in
+    /// place. A builder that has started a second buffer is made one buffer
+    /// again first.
+    /// </summary>
+    public ReadOnlySpan<byte> AsSpan()
+    {
+        if (_more is not null)
+        {
+            Consolidate();
+        }
+        return _buffer.AsSpan(0, _length);
+    }
+
+    // --- Appending ---------------------------------------------------------
 
     public Utf8StringBuilder Append(Rune r)
     {
-        if (r.Value < 0x80)
+        int length = _length;
+        byte[] buffer = _buffer;
+        if (r.Value < 0x80 && (uint)length < (uint)buffer.Length)
         {
-            Reserve(1)[0] = (byte)r.Value;
-            _length++;
+            buffer[length] = (byte)r.Value;
+            _length = length + 1;
+            return this;
         }
-        else
-        {
-            _length += r.EncodeToUtf8(Reserve(4));
-        }
+        return AppendRuneSlow(r);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private Utf8StringBuilder AppendRuneSlow(Rune r)
+    {
+        // Reserved on its own: it may start a new buffer, which sets _length,
+        // and `_length += ...` would have read it before.
+        var room = Reserve(4);
+        _length += r.EncodeToUtf8(room);
         return this;
     }
 
     public Utf8StringBuilder Append(Utf8String s) => AppendValid(s.AsSpan());
-
 
     /// <summary>Appends UTF-8 bytes, which must be valid.</summary>
     public Utf8StringBuilder AppendUtf8(ReadOnlySpan<byte> utf8)
@@ -94,7 +159,17 @@ public sealed class Utf8StringBuilder
     public Utf8StringBuilder Append(ReadOnlySpan<char> utf16)
     {
         int n = Encoding.UTF8.GetByteCount(utf16);
-        _length += Encoding.UTF8.GetBytes(utf16, Reserve(n));
+        if (n <= _buffer.Length - _length || n <= ChunkSize)
+        {
+            var room = Reserve(n);
+            _length += Encoding.UTF8.GetBytes(utf16, room);
+            return this;
+        }
+        // Too large for a buffer: encoded once, and copied in as text is.
+        byte[] rented = ArrayPool<byte>.Shared.Rent(n);
+        int written = Encoding.UTF8.GetBytes(utf16, rented);
+        AppendValid(rented.AsSpan(0, written));
+        ArrayPool<byte>.Shared.Return(rented);
         return this;
     }
 
@@ -102,8 +177,37 @@ public sealed class Utf8StringBuilder
 
     private Utf8StringBuilder AppendValid(ReadOnlySpan<byte> utf8)
     {
-        utf8.CopyTo(Reserve(utf8.Length));
-        _length += utf8.Length;
+        int length = _length;
+        byte[] buffer = _buffer;
+        if (utf8.Length <= buffer.Length - length)
+        {
+            utf8.CopyTo(buffer.AsSpan(length));
+            _length = length + utf8.Length;
+            return this;
+        }
+        return AppendValidSlow(utf8);
+    }
+
+    // What fits goes into this buffer, and the rest into the next, so a long
+    // text is copied once.
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private Utf8StringBuilder AppendValidSlow(ReadOnlySpan<byte> utf8)
+    {
+        if (_buffer.Length < ChunkSize)
+        {
+            // Still one buffer: it grows, as a short builder's does.
+            Grow(utf8.Length);
+            utf8.CopyTo(_buffer.AsSpan(_length));
+            _length += utf8.Length;
+            return this;
+        }
+        int room = _buffer.Length - _length;
+        utf8[..room].CopyTo(_buffer.AsSpan(_length));
+        _length += room;
+        var rest = utf8[room..];
+        StartBuffer(rest.Length);
+        rest.CopyTo(_buffer);
+        _length = rest.Length;
         return this;
     }
 
@@ -112,7 +216,15 @@ public sealed class Utf8StringBuilder
     {
         if (b >= 0x80 && _unchecked < 0)
         {
-            _unchecked = _length;
+            _unchecked = ByteLength;
+        }
+        int length = _length;
+        byte[] buffer = _buffer;
+        if ((uint)length < (uint)buffer.Length)
+        {
+            buffer[length] = b;
+            _length = length + 1;
+            return this;
         }
         Reserve(1)[0] = b;
         _length++;
@@ -129,9 +241,7 @@ public sealed class Utf8StringBuilder
     {
         if (unit < 0x80)
         {
-            Reserve(1)[0] = (byte)unit;
-            _length++;
-            return this;
+            return Append(new Rune(unit));
         }
         if (!char.IsSurrogate(unit))
         {
@@ -140,6 +250,8 @@ public sealed class Utf8StringBuilder
         // A surrogate is held as the three bytes UTF-8 would give it if it
         // were a scalar (as WTF-8 does), which no valid string contains; a low
         // one meeting a held high one replaces it with their pair's four bytes.
+        // The three bytes are reserved together, so they are always in one
+        // buffer, and nothing is written after them before the low one comes.
         if (char.IsLowSurrogate(unit) && _length >= 3 && _buffer[_length - 3] == 0xED
             && (_buffer[_length - 2] & 0xF0) == 0xA0)
         {
@@ -147,11 +259,11 @@ public sealed class Utf8StringBuilder
             _length -= 3;
             return Append(new Rune(high, unit));
         }
+        var held = Reserve(3);
         if (_unchecked < 0)
         {
-            _unchecked = _length;
+            _unchecked = ByteLength;
         }
-        var held = Reserve(3);
         held[0] = (byte)(0xE0 | (unit >> 12));
         held[1] = (byte)(0x80 | ((unit >> 6) & 0x3F));
         held[2] = (byte)(0x80 | (unit & 0x3F));
@@ -180,10 +292,93 @@ public sealed class Utf8StringBuilder
         return this;
     }
 
+    // --- Room --------------------------------------------------------------
+
+    /// <summary>At least <paramref name="n"/> free bytes in one piece, at the
+    /// end of the buffer being written.</summary>
+    private Span<byte> Reserve(int n)
+    {
+        if (_buffer.Length - _length < n)
+        {
+            if (_buffer.Length < ChunkSize)
+            {
+                Grow(n);
+            }
+            else
+            {
+                StartBuffer(n);
+            }
+        }
+        return _buffer.AsSpan(_length);
+    }
+
+    // The one buffer, doubled until it holds n more bytes, and no larger than
+    // a chunk unless n itself is.
+    private void Grow(int n)
+    {
+        int needed = checked(_length + n);
+        int size = Math.Max(Math.Min(_buffer.Length * 2, ChunkSize), needed);
+        var grown = GC.AllocateUninitializedArray<byte>(size);
+        _buffer.AsSpan(0, _length).CopyTo(grown);
+        _buffer = grown;
+    }
+
+    // The buffer being written is kept as a chunk, and a new one of at least
+    // n bytes is started.
+    private void StartBuffer(int n)
+    {
+        var more = _more ??= new Chunks();
+        if (more.Count == more.Buffers.Length)
+        {
+            Array.Resize(ref more.Buffers, more.Count * 2);
+            Array.Resize(ref more.Ends, more.Count * 2);
+        }
+        more.Prefix = checked(more.Prefix + _length);
+        more.Buffers[more.Count] = _buffer;
+        more.Ends[more.Count] = more.Prefix;
+        more.Count++;
+        _buffer = GC.AllocateUninitializedArray<byte>(Math.Max(n, ChunkSize));
+        _length = 0;
+    }
+
+    // The chunks and the buffer, copied into one buffer of their own.
+    private void Consolidate()
+    {
+        int total = ByteLength;
+        var one = GC.AllocateUninitializedArray<byte>(Math.Max(total, 1));
+        CopyTo(one);
+        _buffer = one;
+        _length = total;
+        DropChunks();
+    }
+
+    private void CopyTo(Span<byte> target)
+    {
+        int at = 0;
+        if (_more is { } more)
+        {
+            for (int i = 0; i < more.Count; i++)
+            {
+                int start = i == 0 ? 0 : more.Ends[i - 1];
+                int count = more.Ends[i] - start;
+                more.Buffers[i].AsSpan(0, count).CopyTo(target[at..]);
+                at += count;
+            }
+        }
+        _buffer.AsSpan(0, _length).CopyTo(target[at..]);
+    }
+
+    private void DropChunks() => _more = null;
+
+    // --- Results -----------------------------------------------------------
+
+    /// <summary>Empties the builder and keeps its last buffer, so that a reader
+    /// building many short strings does not allocate one each time.</summary>
     public void Clear()
     {
         _length = 0;
         _unchecked = -1;
+        DropChunks();
     }
 
     /// <summary>
@@ -192,16 +387,34 @@ public sealed class Utf8StringBuilder
     /// </summary>
     public Utf8String ToUtf8String()
     {
+        byte[] bytes;
+        if (_more is null)
+        {
+            if (_length == 0)
+            {
+                _unchecked = -1;
+                return default;
+            }
+            // A short string is the common case, and ToArray is the fastest
+            // way to make one; an array that is not zeroed only pays for a
+            // large one.
+            bytes = _buffer.AsSpan(0, _length).ToArray();
+        }
+        else
+        {
+            bytes = GC.AllocateUninitializedArray<byte>(ByteLength);
+            CopyTo(bytes);
+        }
         if (_unchecked >= 0)
         {
-            if (!Utf8.IsValid(_buffer.AsSpan(_unchecked, _length - _unchecked)))
+            if (!Utf8.IsValid(bytes.AsSpan(_unchecked)))
             {
                 throw new InvalidOperationException(
                     "stringbuilder->string: the bytes added with stringbuilder-add-code! are not valid UTF-8.");
             }
             _unchecked = -1;
         }
-        return _length == 0 ? default : new(AsSpan().ToArray());
+        return new(bytes);
     }
 
     /// <summary>The text so far as a .NET string, invalid bytes as U+FFFD.</summary>
