@@ -180,6 +180,44 @@ public static class BuilderTests
         Check.Equal(big, new Utf8StringBuilder().Append(new string('x', size)).Append(big).ToUtf8String().ToString()[size..], "large UTF-16");
     }
 
+    // A buffer of 85,000 bytes or more is on the large object heap, which only
+    // a full collection frees. One append of any kind and size, into a builder
+    // of any length, leaves every buffer a chunk or smaller, and the text as
+    // it was given.
+    [Test]
+    public static void LargeAppendsStayInChunks()
+    {
+        int size = Utf8StringBuilder.ChunkSize;
+        var rng = new Random(25);
+        foreach (int before in new[] { 0, 5, size / 2, size - 3, size, size + 7, size * 2 + 11 })
+        {
+            foreach (int length in new[] { size - before % 100, size + 1, 85_000, 200_000, size * 3 + 5 })
+            {
+                string prefix = new string('p', before);
+                // Two-, three- and four-byte scalars, so that a buffer boundary
+                // falls inside one at some offset.
+                string text = Text(rng, length / 4) + new string('t', length / 2) + "é€😀";
+                for (int kind = 0; kind < 3; kind++)
+                {
+                    var b = new Utf8StringBuilder();
+                    b.Append(prefix);
+                    switch (kind)
+                    {
+                        case 0: b.Append(U(text)); break;
+                        case 1: b.Append(text); break;
+                        default: b.AppendUtf8(Encoding.UTF8.GetBytes(text)); break;
+                    }
+                    string what = $"kind {kind}, {before} before, {length}";
+                    Check.True(b.LargestBuffer() <= size, $"{what}: a buffer of {b.LargestBuffer()} bytes");
+                    Check.Equal(prefix + text, b.ToUtf8String().ToString(), what);
+                }
+            }
+        }
+        // A lone surrogate in a large UTF-16 text is U+FFFD, as in a short one.
+        string lone = new string('x', size * 2) + "\uD83D" + "y";
+        Check.Equal(new string('x', size * 2) + "\uFFFDy", new Utf8StringBuilder().Append(lone).ToUtf8String().ToString(), "lone surrogate");
+    }
+
     [Test]
     public static void RawBytesAreCheckedAtTheEnd()
     {

@@ -159,18 +159,26 @@ public sealed class Utf8StringBuilder
     public Utf8StringBuilder Append(ReadOnlySpan<char> utf16)
     {
         int n = Encoding.UTF8.GetByteCount(utf16);
-        if (n <= _buffer.Length - _length || n <= ChunkSize)
+        if (n <= _buffer.Length - _length || _length + n <= ChunkSize)
         {
             var room = Reserve(n);
             _length += Encoding.UTF8.GetBytes(utf16, room);
             return this;
         }
-        // Too large for a buffer: encoded once, and copied in as text is.
-        byte[] rented = ArrayPool<byte>.Shared.Rent(n);
-        int written = Encoding.UTF8.GetBytes(utf16, rented);
-        AppendValid(rented.AsSpan(0, written));
-        ArrayPool<byte>.Shared.Return(rented);
-        return this;
+        // More than this buffer can take: encoded into the room there is, then
+        // into new buffers, as text is copied. The encoder stops before a
+        // scalar that does not fit, so a pair is never split.
+        while (true)
+        {
+            var room = Reserve(4);
+            Utf8.FromUtf16(utf16, room, out int read, out int written, replaceInvalidSequences: true);
+            _length += written;
+            utf16 = utf16[read..];
+            if (utf16.IsEmpty)
+            {
+                return this;
+            }
+        }
     }
 
     public Utf8StringBuilder Append(string utf16) => Append(utf16.AsSpan());
@@ -188,12 +196,13 @@ public sealed class Utf8StringBuilder
         return AppendValidSlow(utf8);
     }
 
-    // What fits goes into this buffer, and the rest into the next, so a long
-    // text is copied once.
+    // What fits goes into this buffer, and the rest into new buffers of a
+    // chunk each, so a long text is copied once and no buffer is large enough
+    // for the large object heap.
     [MethodImpl(MethodImplOptions.NoInlining)]
     private Utf8StringBuilder AppendValidSlow(ReadOnlySpan<byte> utf8)
     {
-        if (_buffer.Length < ChunkSize)
+        if (_buffer.Length < ChunkSize && _length + utf8.Length <= ChunkSize)
         {
             // Still one buffer: it grows, as a short builder's does.
             Grow(utf8.Length);
@@ -201,14 +210,18 @@ public sealed class Utf8StringBuilder
             _length += utf8.Length;
             return this;
         }
-        int room = _buffer.Length - _length;
-        utf8[..room].CopyTo(_buffer.AsSpan(_length));
-        _length += room;
-        var rest = utf8[room..];
-        StartBuffer(rest.Length);
-        rest.CopyTo(_buffer);
-        _length = rest.Length;
-        return this;
+        while (true)
+        {
+            int take = Math.Min(_buffer.Length - _length, utf8.Length);
+            utf8[..take].CopyTo(_buffer.AsSpan(_length));
+            _length += take;
+            utf8 = utf8[take..];
+            if (utf8.IsEmpty)
+            {
+                return this;
+            }
+            StartBuffer(ChunkSize);
+        }
     }
 
     /// <summary>Appends one byte, unchecked until <see cref="ToUtf8String"/>.</summary>
@@ -295,12 +308,13 @@ public sealed class Utf8StringBuilder
     // --- Room --------------------------------------------------------------
 
     /// <summary>At least <paramref name="n"/> free bytes in one piece, at the
-    /// end of the buffer being written.</summary>
+    /// end of the buffer being written. Every caller asks for a few bytes: a
+    /// scalar, a number, a surrogate.</summary>
     private Span<byte> Reserve(int n)
     {
         if (_buffer.Length - _length < n)
         {
-            if (_buffer.Length < ChunkSize)
+            if (_buffer.Length < ChunkSize && _length + n <= ChunkSize)
             {
                 Grow(n);
             }
@@ -312,8 +326,8 @@ public sealed class Utf8StringBuilder
         return _buffer.AsSpan(_length);
     }
 
-    // The one buffer, doubled until it holds n more bytes, and no larger than
-    // a chunk unless n itself is.
+    // The one buffer, doubled until it holds n more bytes. The callers grow it
+    // only while it then holds a chunk or less.
     private void Grow(int n)
     {
         int needed = checked(_length + n);
@@ -369,6 +383,21 @@ public sealed class Utf8StringBuilder
     }
 
     private void DropChunks() => _more = null;
+
+    /// <summary>The length of the largest buffer, for the tests that check
+    /// that none is large enough for the large object heap.</summary>
+    internal int LargestBuffer()
+    {
+        int largest = _buffer.Length;
+        if (_more is { } more)
+        {
+            for (int i = 0; i < more.Count; i++)
+            {
+                largest = Math.Max(largest, more.Buffers[i].Length);
+            }
+        }
+        return largest;
+    }
 
     // --- Results -----------------------------------------------------------
 
