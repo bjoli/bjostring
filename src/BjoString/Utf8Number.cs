@@ -11,6 +11,7 @@
  * availability requirements or notice obligations of Section 3 of the MPL 2.0.
  */
 
+using System.Buffers.Text;
 using System.Globalization;
 
 namespace BjoString;
@@ -47,8 +48,17 @@ public static class Utf8Number
     public static long ParseLong(ReadOnlySpan<byte> utf8) =>
         long.Parse(utf8, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
 
+    /// <summary>
+    /// As <c>double.Parse</c> with <c>NumberStyles.Float</c>. <c>Utf8Parser</c>
+    /// is tried first, because it is faster, and its answer is taken only when
+    /// it read all of the text. Text it reads only part of, or not at all,
+    /// such as text with white space around it, goes to <c>double.Parse</c>,
+    /// so the value and the exception are the same as before.
+    /// </summary>
     public static double ParseDouble(ReadOnlySpan<byte> utf8) =>
-        double.Parse(utf8, NumberStyles.Float, CultureInfo.InvariantCulture);
+        Utf8Parser.TryParse(utf8, out double value, out int used) && used == utf8.Length
+            ? value
+            : double.Parse(utf8, NumberStyles.Float, CultureInfo.InvariantCulture);
 
     public static int ParseInt(Utf8String s) => ParseInt(s.AsSpan());
 

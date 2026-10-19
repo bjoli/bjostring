@@ -286,6 +286,23 @@ public static class BuilderTests
         Check.Throws<FormatException>(() => Utf8Number.ParseLong(U(" 1")), "long takes a sign and digits only");
         Check.Throws<OverflowException>(() => Utf8Number.ParseLong(U("99999999999999999999")), "long overflows");
         Check.Equal(1.5e3, Utf8Number.ParseDouble(U("1.5e3")), "double");
+        // ParseDouble tries Utf8Parser first. Each of these answers what
+        // double.Parse answers, the value or the exception.
+        foreach (string text in new[] {
+            "1.5", "-2", "+3", "1e5", "1E-5", ".5", "1.", "-.5", " 1.5", "1.5 ", "\t2\n",
+            "NaN", "nan", "Infinity", "-Infinity", "infinity", "1e999", "1e-999", "-0",
+            "1.7976931348623157E+308", "4.9E-324", "123456789012345678901234567890",
+            "-65.613616999999977", "00012",
+            "∞", "1_000", "0x10", "1,5", "", "-", "e5", "1e", "1e+" })
+        {
+            var utf8 = System.Text.Encoding.UTF8.GetBytes(text);
+            object want, got;
+            try { want = double.Parse(utf8, NumberStyles.Float, CultureInfo.InvariantCulture); }
+            catch (Exception e) { want = e.GetType(); }
+            try { got = Utf8Number.ParseDouble(utf8); }
+            catch (Exception e) { got = e.GetType(); }
+            Check.Equal(want, got, $"parse double \"{text}\"");
+        }
         var t = U("x=42;");
         Check.Equal(42, Utf8Number.ParseInt(t.Slice(new StringCursor(2), new StringCursor(4))), "from a slice");
         var b = new Utf8StringBuilder().Append(U("-7"));
