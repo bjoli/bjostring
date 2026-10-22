@@ -20,6 +20,7 @@ namespace BjoString;
 /// The bridge to UTF-16 text I/O (<see cref="TextWriter"/>), which Bjolang's
 /// ports are today. A stream needs no bridge: write <c>AsSpan()</c>.
 /// </summary>
+[NonUserCode]
 public static class Utf8Text
 {
     /// <summary>Writes the text through a small stack buffer, without making a .NET string.</summary>

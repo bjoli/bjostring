@@ -20,6 +20,7 @@ namespace BjoString;
 /// (<c>GetAlternateLookup&lt;ReadOnlySpan&lt;byte&gt;&gt;()</c>). A slice is a
 /// string, so it needs none.
 /// </summary>
+[NonUserCode]
 public sealed class Utf8StringComparer :
     IEqualityComparer<Utf8String>, IComparer<Utf8String>,
     IAlternateEqualityComparer<ReadOnlySpan<byte>, Utf8String>

@@ -43,6 +43,7 @@ namespace BjoString;
 /// be used on that string.
 /// </para>
 /// </remarks>
+[NonUserCode]
 public readonly record struct StringCursor : IComparable<StringCursor>, IComparisonOperators<StringCursor, StringCursor, bool>
 {
     internal int Offset { get; }
@@ -145,6 +146,7 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
 /// <summary>
 /// Cursor steps over the bytes <c>[lo, hi)</c> of a string's array.
 /// </summary>
+[NonUserCode]
 internal static class Cursors
 {
     // A read without a range check, for an index the step has just checked

@@ -40,6 +40,7 @@ namespace BjoString;
 /// eighteen times over into arrays the collector had to find new memory for.
 /// </para>
 /// </remarks>
+[NonUserCode]
 public sealed class Utf8StringBuilder
 {
     /// <summary>The size of a buffer once the text has outgrown one, below the
@@ -67,6 +68,7 @@ public sealed class Utf8StringBuilder
     // offset at which each ends: buffer i holds the bytes from Ends[i-1] (0 for
     // the first) to Ends[i]. Prefix is the bytes before the one being written,
     // the last of Ends, and 0 when there are none.
+    [NonUserCode]
     private sealed class Chunks
     {
         public byte[][] Buffers = new byte[8][];

@@ -17,6 +17,7 @@ using System.Text;
 namespace BjoString;
 
 /// <summary>The scalars of a string, decoded in place.</summary>
+[NonUserCode]
 public struct RuneEnumerator : IEnumerator<Rune>, IEnumerable<Rune>
 {
     private readonly byte[]? _bytes;
@@ -56,6 +57,7 @@ public struct RuneEnumerator : IEnumerator<Rune>, IEnumerable<Rune>
 }
 
 /// <summary>The fields between separators, as slices of the string.</summary>
+[NonUserCode]
 public struct SplitEnumerator : IEnumerator<Utf8String>, IEnumerable<Utf8String>
 {
     private readonly byte[]? _bytes;

@@ -70,6 +70,7 @@ public readonly partial struct Utf8String :
     /// of either kind of string with one load and no type test.
     /// </remarks>
     [StructLayout(LayoutKind.Explicit)]
+    [NonUserCode]
     internal sealed class Part(byte[] bytes, int start, int length)
     {
         [FieldOffset(0)] public readonly int End = start + length;
@@ -80,6 +81,7 @@ public readonly partial struct Utf8String :
     }
 
     /// <summary>The first field of an object, which for an array is its length.</summary>
+    [NonUserCode]
     private sealed class FirstInt
     {
 #pragma warning disable CS0649 // Never written: only ever read through another object.
@@ -220,6 +222,7 @@ public readonly partial struct Utf8String :
     internal static Bounds PartBounds(object? data) =>
         data is Part p ? new(p.Bytes, p.Start, p.End) : default;
 
+    [NonUserCode]
     internal readonly struct Bounds(byte[]? bytes, int lo, int hi)
     {
         public readonly byte[]? Bytes = bytes;

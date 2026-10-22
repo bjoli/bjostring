@@ -27,6 +27,7 @@ namespace BjoString;
 /// only what has no such routine (counting scalars, decoding at a boundary,
 /// case and trim) is here.
 /// </summary>
+[NonUserCode]
 internal static class Utf8Ops
 {
     /// <summary>The width of the sequence a lead byte starts.</summary>
@@ -366,6 +367,7 @@ internal static class Utf8Ops
 /// A growable byte buffer that starts on the stack and moves to the array pool
 /// past that, for results whose length is not known in advance.
 /// </summary>
+[NonUserCode]
 internal ref struct ByteBuffer
 {
     private byte[]? _rented;

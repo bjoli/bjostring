@@ -18,6 +18,7 @@ namespace BjoString;
 // Searching answers cursors. The operations that make new text return the
 // string itself when nothing changes; the ones named for slices share the
 // array instead of copying.
+[NonUserCode]
 public readonly partial struct Utf8String
 {
     public bool Contains(Utf8String needle) => AsSpan().IndexOf(needle.AsSpan()) >= 0;

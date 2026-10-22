@@ -20,6 +20,7 @@ namespace BjoString;
 /// Numbers to and from UTF-8 text in the invariant culture, with the same
 /// styles as Bjolang's <c>BjoNum</c>, and without a UTF-16 string between.
 /// </summary>
+[NonUserCode]
 public static class Utf8Number
 {
     public static Utf8String Format(int n) => Format<int>(n);
