@@ -12,6 +12,7 @@
  */
 
 using System.Buffers;
+using System.ComponentModel;
 using System.Diagnostics;
 using System.Numerics;
 using System.Runtime.CompilerServices;
@@ -95,6 +96,18 @@ public readonly partial struct Utf8String :
 
     /// <summary>A <c>byte[]</c>, a <see cref="Part"/>, or null for the empty string.</summary>
     private readonly object? _data;
+
+    /// <summary>The text, for a debugger that shows a value by its members.</summary>
+    /// <remarks>
+    /// netcoredbg reads neither <see cref="DebuggerDisplayAttribute"/> nor
+    /// <see cref="DebuggerBrowsableAttribute"/>, and the one field is the
+    /// bytes, so what it shows of a string is a property it runs. It lists the
+    /// properties in the order they are declared, which is why this one is
+    /// here, first. Nothing else calls it: it is not a field, so a string is no
+    /// bigger, and it costs a decoding only when a debugger asks.
+    /// </remarks>
+    [EditorBrowsable(EditorBrowsableState.Never)]
+    public string DebugText => ToString();
 
     /// <summary>Wraps bytes that are valid UTF-8 and that nothing else will write.</summary>
     internal Utf8String(byte[] bytes) => _data = bytes;
