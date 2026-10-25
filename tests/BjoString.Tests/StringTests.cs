@@ -47,6 +47,49 @@ public static class StringTests
         Check.Equal("😀", Utf8String.FromRune(new Rune(0x1F600)).ToString(), "FromRune");
     }
 
+    // IndexOfAny against a search that decodes each character and looks it up
+    // in the set: from every cursor, with sets that are ASCII and sets that
+    // are not, in whole strings and in slices.
+    [Test]
+    public static void IndexOfAnyMatchesNaiveSearch()
+    {
+        var rng = new Random(31);
+        string[] sets = ["", "a", ";=", "\"\\\u0001\n", "é", "a😀", "\u00e5\u00f6", "xyz"];
+        for (int i = 0; i < Cases; i++)
+        {
+            string text = Text(rng, 12);
+            var whole = U("<" + text + ">");
+            var s = whole.Slice(StringCursor.Next(whole, StringCursor.Start(whole)),
+                                StringCursor.Prev(whole, StringCursor.End(whole)));
+            foreach (string set in sets)
+            {
+                var chars = U(set);
+                var runes = set.EnumerateRunes().ToHashSet();
+                for (var from = StringCursor.Start(s); ; from = StringCursor.Next(s, from))
+                {
+                    StringCursor? expected = null;
+                    for (var c = from; !StringCursor.AtEnd(s, c); c = StringCursor.Next(s, c))
+                    {
+                        if (runes.Contains(StringCursor.Ref(s, c)))
+                        {
+                            expected = c;
+                            break;
+                        }
+                    }
+                    Check.Equal(expected, s.IndexOfAny(chars, from), $"\"{set}\" in \"{text}\"");
+                    if (StringCursor.AtEnd(s, from)) break;
+                }
+            }
+        }
+        // A set that is a slice of a longer string is its own characters only.
+        var longer = U("ab;cd");
+        var semicolon = longer.Slice(StringCursor.Next(longer, StringCursor.Next(longer, StringCursor.Start(longer))),
+                                     StringCursor.Next(longer, StringCursor.Next(longer, StringCursor.Next(longer, StringCursor.Start(longer)))));
+        var target = U("xa;b");
+        Check.Equal(StringCursor.Next(target, StringCursor.Next(target, StringCursor.Start(target))),
+                    target.IndexOfAny(semicolon, StringCursor.Start(target)), "a slice as the set");
+    }
+
     [Test]
     public static void InvalidUtf8()
     {

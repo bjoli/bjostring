@@ -19,6 +19,61 @@ namespace BjoString.Tests;
 
 public static class BuilderTests
 {
+    // Bytes appended in runs are the text the runs were cut from, wherever the
+    // cuts fall, checked when the builder becomes a string.
+    [Test]
+    public static void AppendBytesInRuns()
+    {
+        var rng = new Random(33);
+        for (int i = 0; i < Cases / 10; i++)
+        {
+            string text = Text(rng, 10);
+            byte[] utf8 = Encoding.UTF8.GetBytes(text);
+            var b = new Utf8StringBuilder(1);
+            int at = 0;
+            while (at < utf8.Length)
+            {
+                int n = Math.Min(utf8.Length - at, 1 + rng.Next(5));
+                b.AppendBytes(utf8.AsSpan(at, n));
+                at += n;
+            }
+            Check.Equal(text, b.ToUtf8String().ToString(), "the runs are the text");
+        }
+        var bad = new Utf8StringBuilder().Append(U("ok")).AppendBytes([0x61, 0xFF]);
+        Check.Throws<InvalidOperationException>(() => bad.ToUtf8String(), "a byte that is not UTF-8");
+    }
+
+    // The text between two cursors, appended, is the slice between them, and
+    // a builder of many such pieces is the text they were cut from.
+    [Test]
+    public static void AppendBetweenCursorsIsTheSlice()
+    {
+        var rng = new Random(32);
+        for (int i = 0; i < Cases / 10; i++)
+        {
+            var s = U(Text(rng, 10));
+            var b = new Utf8StringBuilder(1);
+            var from = StringCursor.Start(s);
+            while (!StringCursor.AtEnd(s, from))
+            {
+                var to = from;
+                for (int k = 1 + rng.Next(4); k > 0 && !StringCursor.AtEnd(s, to); k--)
+                {
+                    to = StringCursor.Next(s, to);
+                }
+                var one = new Utf8StringBuilder().Append(s, from, to).ToUtf8String();
+                Check.True(one == s.Slice(from, to), "one piece is the slice");
+                b.Append(s, from, to);
+                from = to;
+            }
+            Check.True(b.ToUtf8String() == s, "the pieces are the text");
+            Check.True(new Utf8StringBuilder().Append(s, from, from).ToUtf8String().IsEmpty, "an empty range");
+        }
+        var t = U("abc");
+        Check.Throws<ArgumentException>(
+            () => new Utf8StringBuilder().Append(t, StringCursor.End(t), StringCursor.Start(t)), "cursors out of order");
+    }
+
     [Test]
     public static void AppendsMatchStringBuilder()
     {

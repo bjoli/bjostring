@@ -53,6 +53,29 @@ public readonly partial struct Utf8String
         return i < 0 ? null : CursorAt(i);
     }
 
+    /// <summary>
+    /// The first character at or after <paramref name="from"/> that is one of
+    /// the characters of <paramref name="chars"/>, or null.
+    /// </summary>
+    /// <remarks>
+    /// When every character of <paramref name="chars"/> is ASCII, this is a
+    /// vectorized search of the bytes. An ASCII byte is never part of a longer
+    /// character in UTF-8, so a byte found is a character found, and the
+    /// cursor is on a boundary.
+    /// </remarks>
+    public StringCursor? IndexOfAny(Utf8String chars, StringCursor from)
+    {
+        if (from.Offset < Start || from.Offset > End)
+        {
+            throw new ArgumentOutOfRangeException(nameof(from), "The cursor is outside the string.");
+        }
+        var rest = new ReadOnlySpan<byte>(Bytes, from.Offset, End - from.Offset);
+        int i = Utf8Ops.AsciiSet(chars) is { } set
+            ? rest.IndexOfAny(set)
+            : Utf8Ops.IndexOfAnyRune(rest, chars);
+        return i < 0 ? null : new StringCursor(from.Offset + i);
+    }
+
     /// <summary>The last occurrence, or null. An empty needle is found at the end.</summary>
     public StringCursor? LastIndexOf(Utf8String needle)
     {

@@ -147,6 +147,11 @@ public sealed class Utf8StringBuilder
 
     public Utf8StringBuilder Append(Utf8String s) => AppendValid(s.AsSpan());
 
+    /// <summary>The text of <paramref name="s"/> between two cursors, the
+    /// second exclusive, copied without making a string of it.</summary>
+    public Utf8StringBuilder Append(Utf8String s, StringCursor start, StringCursor end) =>
+        AppendValid(s.AsSpan(start, end));
+
     /// <summary>Appends UTF-8 bytes, which must be valid.</summary>
     public Utf8StringBuilder AppendUtf8(ReadOnlySpan<byte> utf8)
     {
@@ -224,6 +229,18 @@ public sealed class Utf8StringBuilder
             }
             StartBuffer(ChunkSize);
         }
+    }
+
+    /// <summary>Appends bytes, unchecked until <see cref="ToUtf8String"/>,
+    /// as <see cref="AppendByte"/> appends one: for a reader copying a run of
+    /// its input in one piece.</summary>
+    public Utf8StringBuilder AppendBytes(ReadOnlySpan<byte> bytes)
+    {
+        if (_unchecked < 0 && !Ascii.IsValid(bytes))
+        {
+            _unchecked = ByteLength;
+        }
+        return AppendValid(bytes);
     }
 
     /// <summary>Appends one byte, unchecked until <see cref="ToUtf8String"/>.</summary>

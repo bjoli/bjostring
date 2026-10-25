@@ -163,6 +163,81 @@ internal static class Utf8Ops
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static ReadOnlySpan<byte> Encode(Rune r, Span<byte> buffer) => buffer[..r.EncodeToUtf8(buffer)];
 
+    // A set to search for, made from a string of characters: the bytes as a
+    // `SearchValues` when they are all ASCII, and null when they are not.
+    [NonUserCode]
+    private sealed class CharSet(SearchValues<byte>? ascii)
+    {
+        public readonly SearchValues<byte>? Ascii = ascii;
+    }
+
+    // The sets made, by the array of the string they were made from. A set is
+    // usually a constant, so it is made once. The table holds the arrays
+    // weakly, so a set made from a string that is gone is dropped.
+    private static readonly ConditionalWeakTable<byte[], CharSet> CharSets = new();
+
+    // The last set looked up on this thread. A loop that searches with one set
+    // many times, an escaper's, then pays a reference comparison a search
+    // rather than a lookup in the table.
+    [ThreadStatic] private static byte[]? s_lastSetBytes;
+    [ThreadStatic] private static CharSet? s_lastSet;
+
+    private static CharSet MakeSet(ReadOnlySpan<byte> chars) =>
+        new(Ascii.IsValid(chars) ? SearchValues.Create(chars) : null);
+
+    // A method rather than a lambda, which would be a method of a class the
+    // compiler makes, and that class would not be [NonUserCode].
+    private static CharSet MakeSetOf(byte[] chars) => MakeSet(chars);
+
+    private static readonly ConditionalWeakTable<byte[], CharSet>.CreateValueCallback MakeSetFor = MakeSetOf;
+
+    /// <summary>
+    /// The characters of <paramref name="chars"/> as a byte set to search for,
+    /// or null when one of them is not ASCII. Made once for a string that is
+    /// all of its array, as a literal is; a slice of a longer array is made
+    /// each time, since its array is not the set.
+    /// </summary>
+    public static SearchValues<byte>? AsciiSet(Utf8String chars)
+    {
+        var bytes = chars.Bytes;
+        if (bytes is null)
+        {
+            return SearchValues.Create(ReadOnlySpan<byte>.Empty);
+        }
+        if (chars.Start != 0 || chars.End != bytes.Length)
+        {
+            return MakeSet(chars.AsSpan()).Ascii;
+        }
+        if (ReferenceEquals(bytes, s_lastSetBytes))
+        {
+            return s_lastSet!.Ascii;
+        }
+        var set = CharSets.GetValue(bytes, MakeSetFor);
+        s_lastSetBytes = bytes;
+        s_lastSet = set;
+        return set.Ascii;
+    }
+
+    /// <summary>
+    /// Byte offset of the first character of <paramref name="s"/> that is one
+    /// of the characters of <paramref name="chars"/>, or -1, for a set that is
+    /// not all ASCII: each character is decoded and looked for in the set.
+    /// </summary>
+    public static int IndexOfAnyRune(ReadOnlySpan<byte> s, Utf8String chars)
+    {
+        int at = 0;
+        while (at < s.Length)
+        {
+            Rune.DecodeFromUtf8(s[at..], out Rune r, out int used);
+            if (chars.Contains(r))
+            {
+                return at;
+            }
+            at += used;
+        }
+        return -1;
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int IndexOf(ReadOnlySpan<byte> s, Rune r)
     {
