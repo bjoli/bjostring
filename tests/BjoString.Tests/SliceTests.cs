@@ -12,6 +12,7 @@
  */
 
 using System.Text;
+using System.Text.Unicode;
 using static BjoString.Tests.Gen;
 
 namespace BjoString.Tests;
@@ -60,6 +61,50 @@ public static class SliceTests
         }
         var (s, _) = Middle("ab", "cd", "ef");
         Check.Throws<ArgumentOutOfRangeException>(() => s.IndexOf(U("x"), new StringCursor(0)), "from before the slice");
+    }
+
+    /// <summary>An offset at the end, or at a byte that is not a continuation byte.</summary>
+    private static bool OnBoundary(byte[] bytes, int i) => i == bytes.Length || (bytes[i] & 0xC0) != 0x80;
+
+    /// <summary>
+    /// Every byte range of a string, of a whole one and of a slice: a range
+    /// that starts and ends on boundaries is a slice of those bytes, and any
+    /// other is refused, so no slice is invalid UTF-8.
+    /// </summary>
+    [Test]
+    public static void SliceBytesOnlyOnBoundaries()
+    {
+        var (middle, _) = Middle("é", "aé😀b", "😀");
+        foreach (var s in new[] { U("aé😀b"), middle })
+        {
+            var bytes = s.AsSpan().ToArray();
+            for (int start = 0; start <= bytes.Length; start++)
+            {
+                for (int end = start; end <= bytes.Length; end++)
+                {
+                    bool onBoundaries = OnBoundary(bytes, start) && OnBoundary(bytes, end);
+                    string what = $"[{start}, {end}) of {s}";
+                    if (onBoundaries)
+                    {
+                        var slice = s.SliceBytes(start, end - start);
+                        Check.SequenceEqual(bytes[start..end], slice.AsSpan().ToArray(), what);
+                        Check.True(Utf8.IsValid(slice.AsSpan()), $"valid {what}");
+                        Check.Equal(Encoding.UTF8.GetString(bytes[start..end]), slice.ToString(), $"text {what}");
+                    }
+                    else
+                    {
+                        int st = start, en = end;
+                        Check.Throws<ArgumentException>(() => s.SliceBytes(st, en - st), $"refused {what}");
+                    }
+                }
+            }
+            int n = bytes.Length;
+            Check.Throws<ArgumentOutOfRangeException>(() => s.SliceBytes(-1, 1), "before the start");
+            Check.Throws<ArgumentOutOfRangeException>(() => s.SliceBytes(n + 1, 0), "after the end");
+            Check.Throws<ArgumentOutOfRangeException>(() => s.SliceBytes(0, n + 1), "longer than the string");
+            Check.Throws<ArgumentOutOfRangeException>(() => s.SliceBytes(1, -1), "a negative length");
+        }
+        Check.True(middle.SliceBytes(0, 0).IsEmpty, "an empty slice");
     }
 
     [Test]

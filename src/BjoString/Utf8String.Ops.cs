@@ -96,6 +96,38 @@ public readonly partial struct Utf8String
         return new(Bytes, start.Offset, end.Offset - start.Offset);
     }
 
+    /// <summary>
+    /// The bytes <c>[start, start + length)</c> of <see cref="AsSpan()"/> as a
+    /// slice that shares this string's array, as <see cref="Slice"/> does.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// For a caller that has byte offsets and not cursors, such as a reader of
+    /// a buffer that holds strings end to end: it makes one string of the
+    /// buffer, which checks it once, and a slice of it for each string.
+    /// </para>
+    /// <para>
+    /// Both ends have to be in the string and on scalar boundaries. A range of
+    /// valid UTF-8 that starts and ends on boundaries is valid UTF-8, so the
+    /// slice is valid as this string is. An end outside the string throws
+    /// <see cref="ArgumentOutOfRangeException"/>, and an end in the middle of a
+    /// scalar throws <see cref="ArgumentException"/>, as for a cursor.
+    /// </para>
+    /// </remarks>
+    public Utf8String SliceBytes(int start, int length)
+    {
+        var span = AsSpan();
+        if ((uint)start > (uint)span.Length || (uint)length > (uint)(span.Length - start))
+        {
+            throw new ArgumentOutOfRangeException(nameof(start), "slice: the bytes are outside the string.");
+        }
+        if (!Cursors.IsBoundary(span, start) || !Cursors.IsBoundary(span, start + length))
+        {
+            throw new ArgumentException("slice: a byte offset is in the middle of a character.", nameof(start));
+        }
+        return length == 0 ? default : new(Bytes, Start + start, length);
+    }
+
     /// <summary>The text between two cursors, the second exclusive; the string itself if that is all of it.</summary>
     public Utf8String Substring(StringCursor start, StringCursor end)
     {
