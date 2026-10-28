@@ -50,16 +50,21 @@ public static class Utf8Number
         long.Parse(utf8, NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture);
 
     /// <summary>
-    /// As <c>double.Parse</c> with <c>NumberStyles.Float</c>. <c>Utf8Parser</c>
-    /// is tried first, because it is faster, and its answer is taken only when
-    /// it read all of the text. Text it reads only part of, or not at all,
-    /// such as text with white space around it, goes to <c>double.Parse</c>,
-    /// so the value and the exception are the same as before.
+    /// As <c>double.Parse</c> with <c>NumberStyles.Float</c>. <c>FastDouble</c>
+    /// is tried first, then <c>Utf8Parser</c>, because both are faster, and an
+    /// answer of either is taken only when it read all of the text. Text
+    /// neither is sure of, such as text with white space around it, goes to
+    /// <c>double.Parse</c>, so the value and the exception are the same as
+    /// before.
     /// </summary>
-    public static double ParseDouble(ReadOnlySpan<byte> utf8) =>
-        Utf8Parser.TryParse(utf8, out double value, out int used) && used == utf8.Length
+    public static double ParseDouble(ReadOnlySpan<byte> utf8)
+    {
+        if (FastDouble.TryParse(utf8, out double fast)) return fast;
+
+        return Utf8Parser.TryParse(utf8, out double value, out int used) && used == utf8.Length
             ? value
             : double.Parse(utf8, NumberStyles.Float, CultureInfo.InvariantCulture);
+    }
 
     public static int ParseInt(Utf8String s) => ParseInt(s.AsSpan());
 
