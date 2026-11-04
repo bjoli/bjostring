@@ -90,13 +90,36 @@ public readonly partial struct Utf8String :
 #pragma warning restore CS0649
     }
 
+    /// <summary>
+    /// Whether an array keeps its length in its first field, which
+    /// <see cref="EndOf"/> reads.
+    /// </summary>
+    /// <remarks>
+    /// <list type="bullet">
+    /// <item>CoreCLR and Native AOT do. Mono does not: its arrays have a
+    /// bounds pointer before the length, so the first field of a whole string
+    /// reads as 0.</item>
+    /// <item>Mono is the runtime on the browser and WASI, and can be on
+    /// Android and Apple's platforms. There the length is read by a type
+    /// test.</item>
+    /// <item>Each <c>OperatingSystem.Is*</c> is a constant in the core
+    /// library built for its platform, so the test costs nothing.</item>
+    /// </list>
+    /// </remarks>
+    private static bool LengthIsFirstField =>
+        !(OperatingSystem.IsBrowser() || OperatingSystem.IsWasi() || OperatingSystem.IsAndroid()
+          || OperatingSystem.IsIOS() || OperatingSystem.IsTvOS() || OperatingSystem.IsMacCatalyst());
+
     /// <summary>The past-the-end offset of a string with this data: the array's length or the part's end.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static int EndOf(object? data) => data is null ? 0 : Unsafe.As<FirstInt>(data).Value;
+    internal static int EndOf(object? data) => data is null ? 0 : EndOfNotNull(data);
 
     /// <summary><see cref="EndOf"/> for data that a caller has already tested for null.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal static int EndOfNotNull(object data) => Unsafe.As<FirstInt>(data).Value;
+    internal static int EndOfNotNull(object data) =>
+        LengthIsFirstField || data.GetType() != typeof(byte[])
+            ? Unsafe.As<FirstInt>(data).Value
+            : Unsafe.As<byte[]>(data).Length;
 
     /// <summary>A <c>byte[]</c>, a <see cref="Part"/>, or null for the empty string.</summary>
     private readonly object? _data;
