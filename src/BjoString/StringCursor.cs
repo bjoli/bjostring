@@ -46,6 +46,8 @@ namespace BjoString;
 [NonUserCode]
 public readonly record struct StringCursor : IComparable<StringCursor>, IComparisonOperators<StringCursor, StringCursor, bool>
 {
+    // The offset must stay the only field: the steps make a cursor from an
+    // offset with Unsafe.BitCast, which costs no inline (see Cursors).
     internal int Offset { get; }
 
     internal StringCursor(int offset) => Offset = offset;
@@ -65,24 +67,17 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
     {
         var d = s.Data;
         int i = c.Offset;
-        byte[]? a;
-        int hi;
-        if (Utf8String.IsWhole(d))
+        byte[]? a = Unsafe.As<byte[]>(d);
+        int hi = 0;
+        if (d is not null)
         {
-            a = Unsafe.As<byte[]>(d)!;
-            hi = a.Length;
-        }
-        else if (d is not null)
-        {
-            var p = Unsafe.As<Utf8String.Part>(d);
-            a = p.Bytes;
-            hi = p.End;
-            if (i < p.Start) i = -1;
-        }
-        else
-        {
-            a = null;
-            hi = 0;
+            hi = Utf8String.EndOfNotNull(d);
+            if (d.GetType() != typeof(byte[]))
+            {
+                var p = Unsafe.As<Utf8String.Part>(d);
+                a = p.Bytes;
+                if (i < p.Start) i = -1;
+            }
         }
         return Cursors.Ref(a!, hi, i);
     }
@@ -93,26 +88,19 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
     {
         var d = s.Data;
         int i = c.Offset;
-        byte[]? a;
-        int hi;
-        if (Utf8String.IsWhole(d))
+        byte[]? a = Unsafe.As<byte[]>(d);
+        int hi = 0;
+        if (d is not null)
         {
-            a = Unsafe.As<byte[]>(d)!;
-            hi = a.Length;
+            hi = Utf8String.EndOfNotNull(d);
+            if (d.GetType() != typeof(byte[]))
+            {
+                var p = Unsafe.As<Utf8String.Part>(d);
+                a = p.Bytes;
+                if (i < p.Start) i = -1;
+            }
         }
-        else if (d is not null)
-        {
-            var p = Unsafe.As<Utf8String.Part>(d);
-            a = p.Bytes;
-            hi = p.End;
-            if (i < p.Start) i = -1;
-        }
-        else
-        {
-            a = null;
-            hi = 0;
-        }
-        return new(Cursors.Next(a!, hi, i));
+        return Unsafe.BitCast<int, StringCursor>(Cursors.Next(a!, hi, i));
     }
 
     /// <summary>The cursor on the previous scalar.</summary>
@@ -120,7 +108,7 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
     public static StringCursor Prev(Utf8String s, StringCursor c)
     {
         var b = s.GetBounds();
-        return new(Cursors.Prev(b.Bytes, b.Lo, b.Hi, c.Offset));
+        return Unsafe.BitCast<int, StringCursor>(Cursors.Prev(b.Bytes, b.Lo, b.Hi, c.Offset));
     }
 
     /// <summary>
@@ -132,24 +120,17 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
     {
         var d = s.Data;
         int i = c.Offset;
-        byte[]? a;
-        int hi;
-        if (Utf8String.IsWhole(d))
+        byte[]? a = Unsafe.As<byte[]>(d);
+        int hi = 0;
+        if (d is not null)
         {
-            a = Unsafe.As<byte[]>(d)!;
-            hi = a.Length;
-        }
-        else if (d is not null)
-        {
-            var p = Unsafe.As<Utf8String.Part>(d);
-            a = p.Bytes;
-            hi = p.End;
-            if (i < p.Start) i = -1;
-        }
-        else
-        {
-            a = null;
-            hi = 0;
+            hi = Utf8String.EndOfNotNull(d);
+            if (d.GetType() != typeof(byte[]))
+            {
+                var p = Unsafe.As<Utf8String.Part>(d);
+                a = p.Bytes;
+                if (i < p.Start) i = -1;
+            }
         }
         return Cursors.RefNext(a!, hi, i);
     }
@@ -175,17 +156,37 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
 /// <summary>
 /// Cursor steps over the bytes <c>[lo, hi)</c> of a string's array.
 /// </summary>
+///
+/// <remarks>
+/// <para>
+/// The steps are inlined into every string loop. Each inline uses part of the
+/// JIT's inline budget for the method that contains the loop, by the IL size
+/// of the inlined method. When the budget is used up, the JIT keeps the
+/// remaining helpers as calls, and the loop becomes several times slower. This
+/// happens most when PGO inlines a method with a loop into a small caller. So
+/// the steps are small, and call no helpers on the path that returns:
+/// </para>
+/// <list type="bullet">
+/// <item>Bytes are read with <c>Unsafe.Add</c>, which the JIT expands in place.</item>
+/// <item>A <see cref="Rune"/> and a <see cref="StringCursor"/> are made by <c>Unsafe.BitCast</c>, not by a constructor.</item>
+/// <item>Each continuation byte is read once, by code that all widths share.</item>
+/// <item><c>Ref</c> and <c>RefNext</c> have one exit, so the result is built once.</item>
+/// </list>
+/// <para>
+/// Check a change here with the cursor loops of a Bjolang program under the
+/// default JIT settings, and with <c>DOTNET_JitDisasm</c>. A loop that is
+/// fast in a C# benchmark can still be over budget in Bjolang's code.
+/// </para>
+/// <para>
+/// The reads are not range checked. The step checks the index against
+/// <c>[lo, hi)</c> first, and a string's bounds are inside its array. The
+/// continuation bytes of a multi-byte scalar are inside as well, because the
+/// string is valid UTF-8 and ends on a boundary.
+/// </para>
+/// </remarks>
 [NonUserCode]
 internal static class Cursors
 {
-    // A read without a range check, for an index the step has just checked
-    // against [lo, hi), which a string's bounds keep inside its array.
-    // The continuation bytes of a multi-byte scalar are inside as well: the
-    // string is valid UTF-8 and ends on a boundary.
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static byte At(byte[] s, int i) =>
-        Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(s), (nint)(uint)i);
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static Rune Ref(byte[] s, int hi, int i)
     {
@@ -193,24 +194,28 @@ internal static class Cursors
         {
             ThrowOutside("string-cursor-ref", i, hi);
         }
-        uint b = At(s, i);
-        if (b < 0x80)
-        {
-            return Unsafe.BitCast<uint, Rune>(b);
-        }
-        if (b < 0xE0)
+        uint b = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(s), (nint)(uint)i);
+        if (b >= 0x80)
         {
             if (b < 0xC2)
             {
                 ThrowNotBoundary("string-cursor-ref");
             }
-            return Unsafe.BitCast<uint, Rune>(((b & 0x1F) << 6) | (At(s, i + 1) & 0x3Fu));
+            ref byte p = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(s), (nint)(uint)i);
+            uint c1 = Unsafe.Add(ref p, 1) & 0x3Fu;
+            if (b < 0xE0)
+            {
+                b = ((b & 0x1F) << 6) | c1;
+            }
+            else
+            {
+                uint c2 = Unsafe.Add(ref p, 2) & 0x3Fu;
+                b = b < 0xF0
+                    ? ((b & 0x0F) << 12) | (c1 << 6) | c2
+                    : ((b & 0x07) << 18) | (c1 << 12) | (c2 << 6) | (Unsafe.Add(ref p, 3) & 0x3Fu);
+            }
         }
-        if (b < 0xF0)
-        {
-            return Unsafe.BitCast<uint, Rune>(((b & 0x0F) << 12) | ((At(s, i + 1) & 0x3Fu) << 6) | (At(s, i + 2) & 0x3Fu));
-        }
-        return Unsafe.BitCast<uint, Rune>(((b & 0x07) << 18) | ((At(s, i + 1) & 0x3Fu) << 12) | ((At(s, i + 2) & 0x3Fu) << 6) | (At(s, i + 3) & 0x3Fu));
+        return Unsafe.BitCast<uint, Rune>(b);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -220,7 +225,7 @@ internal static class Cursors
         {
             ThrowOutside("string-cursor-next", i, hi);
         }
-        uint b = At(s, i);
+        uint b = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(s), (nint)(uint)i);
         if (b < 0x80)
         {
             return i + 1;
@@ -240,8 +245,9 @@ internal static class Cursors
         {
             ThrowBeforeStart(i, lo);
         }
+        ref byte p = ref MemoryMarshal.GetArrayDataReference(s!);
         i--;
-        while (i > lo && Utf8Ops.IsContinuation(At(s!, i)))
+        while (i > lo && (Unsafe.Add(ref p, (nint)(uint)i) & 0xC0) == 0x80)
         {
             i--;
         }
@@ -256,24 +262,45 @@ internal static class Cursors
         {
             ThrowOutside("string-cursor-ref+next", i, hi);
         }
-        uint b = At(s, i);
+        uint b = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(s), (nint)(uint)i);
+        // `i` becomes the next offset on every path, so that the JIT can keep
+        // it in the register of the caller's cursor.
         if (b < 0x80)
         {
-            return (Unsafe.BitCast<uint, Rune>(b), new(i + 1));
+            i++;
         }
-        if (b < 0xE0)
+        else
         {
             if (b < 0xC2)
             {
                 ThrowNotBoundary("string-cursor-ref+next");
             }
-            return (Unsafe.BitCast<uint, Rune>(((b & 0x1F) << 6) | (At(s, i + 1) & 0x3Fu)), new(i + 2));
+            ref byte p = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(s), (nint)(uint)i);
+            uint c1 = Unsafe.Add(ref p, 1) & 0x3Fu;
+            if (b < 0xE0)
+            {
+                b = ((b & 0x1F) << 6) | c1;
+                i += 2;
+            }
+            else
+            {
+                uint c2 = Unsafe.Add(ref p, 2) & 0x3Fu;
+                if (b < 0xF0)
+                {
+                    b = ((b & 0x0F) << 12) | (c1 << 6) | c2;
+                    i += 3;
+                }
+                else
+                {
+                    b = ((b & 0x07) << 18) | (c1 << 12) | (c2 << 6) | (Unsafe.Add(ref p, 3) & 0x3Fu);
+                    i += 4;
+                }
+            }
         }
-        if (b < 0xF0)
-        {
-            return (Unsafe.BitCast<uint, Rune>(((b & 0x0F) << 12) | ((At(s, i + 1) & 0x3Fu) << 6) | (At(s, i + 2) & 0x3Fu)), new(i + 3));
-        }
-        return (Unsafe.BitCast<uint, Rune>(((b & 0x07) << 18) | ((At(s, i + 1) & 0x3Fu) << 12) | ((At(s, i + 2) & 0x3Fu) << 6) | (At(s, i + 3) & 0x3Fu)), new(i + 4));
+        (Rune, StringCursor) result = default;
+        result.Item1 = Unsafe.BitCast<uint, Rune>(b);
+        result.Item2 = Unsafe.BitCast<int, StringCursor>(i);
+        return result;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -286,23 +313,35 @@ internal static class Cursors
         (uint)i <= (uint)s.Length && (i == s.Length || !Utf8Ops.IsContinuation(s[i]));
 
     // The throws are out of line so that the steps stay small enough to inline
-    // into the loops that call them, which is every string traversal. Not
-    // NoInlining: the JIT has to look inside to learn that they never return,
-    // and only then drops the bounds checks they already made.
+    // into the loops that call them, which is every string traversal.
+    // - The Throw* methods are not NoInlining: the JIT has to look inside to
+    //   learn that they never return, and only then drops the bounds checks
+    //   they already made. Their bodies are only a call and a throw, so this
+    //   look uses almost none of the caller's inline budget.
+    // - The exceptions are made by NoInlining methods, so that the message
+    //   formatting is never copied into a caller.
     [DoesNotReturn]
-    internal static void ThrowOutside(string op, int i, int hi) =>
-        throw new ArgumentOutOfRangeException("c", i >= hi
+    internal static void ThrowOutside(string op, int i, int hi) => throw Outside(op, i, hi);
+
+    [DoesNotReturn]
+    private static void ThrowBeforeStart(int i, int lo) => throw BeforeStart(i, lo);
+
+    [DoesNotReturn]
+    public static void ThrowNotBoundary(string op) => throw NotBoundary(op);
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ArgumentOutOfRangeException Outside(string op, int i, int hi) =>
+        new("c", i >= hi
             ? $"{op}: the cursor is at the end of the string. Guard with (string-cursor-end? s c)."
             : $"{op}: the cursor is outside the slice.");
 
-    [DoesNotReturn]
-    private static void ThrowBeforeStart(int i, int lo) =>
-        throw new ArgumentOutOfRangeException("c", i <= lo
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ArgumentOutOfRangeException BeforeStart(int i, int lo) =>
+        new("c", i <= lo
             ? "string-cursor-prev: the cursor is at the start of the string."
             : "string-cursor-prev: the cursor is outside the slice.");
 
-    [DoesNotReturn]
-    public static void ThrowNotBoundary(string op) =>
-        throw new ArgumentException(
-            $"{op}: the cursor is not on a character boundary of this string; was it made from another string?", "c");
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static ArgumentException NotBoundary(string op) =>
+        new($"{op}: the cursor is not on a character boundary of this string; was it made from another string?", "c");
 }

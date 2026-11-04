@@ -94,6 +94,10 @@ public readonly partial struct Utf8String :
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal static int EndOf(object? data) => data is null ? 0 : Unsafe.As<FirstInt>(data).Value;
 
+    /// <summary><see cref="EndOf"/> for data that a caller has already tested for null.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static int EndOfNotNull(object data) => Unsafe.As<FirstInt>(data).Value;
+
     /// <summary>A <c>byte[]</c>, a <see cref="Part"/>, or null for the empty string.</summary>
     private readonly object? _data;
 
