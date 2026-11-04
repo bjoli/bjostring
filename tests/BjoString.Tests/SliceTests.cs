@@ -214,6 +214,42 @@ public static class SliceTests
         Check.True(second.Slice(start, StringCursor.Next(second, start)).ContentEquals("c"u8), "sub-slice");
     }
 
+    // The steps on StringBounds must return and raise what the steps on the
+    // string do, for every offset of the array: on and between boundaries,
+    // inside and outside the slice, and at both ends.
+    [Test]
+    public static void BoundsStepsAreTheStringSteps()
+    {
+        var u = U("ab,cé,😀€z");
+        var second = u.Slice(StringCursor.Next(u, StringCursor.Start(u)), StringCursor.Prev(u, StringCursor.End(u)));
+        foreach (var (what, s) in new[] { ("whole", u), ("slice", second), ("empty", default(Utf8String)) })
+        {
+            var b = StringBounds.Of(s);
+            for (int i = -1; i <= u.ByteLength + 1; i++)
+            {
+                var c = new StringCursor(i);
+                string at = $"{what} at {i}";
+                Check.Equal(StringCursor.AtEnd(s, c), StringCursor.AtEnd(b, c), $"end?, {at}");
+                Check.Equal(Outcome(() => StringCursor.Ref(s, c)), Outcome(() => StringCursor.Ref(b, c)), $"ref, {at}");
+                Check.Equal(Outcome(() => StringCursor.Next(s, c)), Outcome(() => StringCursor.Next(b, c)), $"next, {at}");
+                Check.Equal(Outcome(() => StringCursor.Prev(s, c)), Outcome(() => StringCursor.Prev(b, c)), $"prev, {at}");
+                Check.Equal(Outcome(() => StringCursor.RefNext(s, c)), Outcome(() => StringCursor.RefNext(b, c)), $"ref+next, {at}");
+            }
+        }
+
+        static string Outcome<T>(Func<T> f)
+        {
+            try
+            {
+                return $"{f()}";
+            }
+            catch (Exception e)
+            {
+                return $"{e.GetType().Name}: {e.Message}";
+            }
+        }
+    }
+
     [Test]
     public static void ConcatAndJoin()
     {

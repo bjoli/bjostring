@@ -135,6 +135,35 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
         return Cursors.RefNext(a!, hi, i);
     }
 
+    // The steps on the bounds of a string, taken once with StringBounds.Of.
+    // They return and raise what the steps on the string return and raise. A
+    // cursor below the slice is given as -1, so the range check rejects it
+    // with the "outside the slice" message, as the steps on the string do.
+
+    /// <summary><see cref="AtEnd(Utf8String, StringCursor)"/> on the bounds of the string.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static bool AtEnd(StringBounds b, StringCursor c) => c.Offset >= b.Hi;
+
+    /// <summary><see cref="Ref(Utf8String, StringCursor)"/> on the bounds of the string.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Rune Ref(StringBounds b, StringCursor c) =>
+        Cursors.Ref(b.Bytes!, b.Hi, c.Offset >= b.Lo ? c.Offset : -1);
+
+    /// <summary><see cref="Next(Utf8String, StringCursor)"/> on the bounds of the string.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static StringCursor Next(StringBounds b, StringCursor c) =>
+        Unsafe.BitCast<int, StringCursor>(Cursors.Next(b.Bytes!, b.Hi, c.Offset >= b.Lo ? c.Offset : -1));
+
+    /// <summary><see cref="Prev(Utf8String, StringCursor)"/> on the bounds of the string.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static StringCursor Prev(StringBounds b, StringCursor c) =>
+        Unsafe.BitCast<int, StringCursor>(Cursors.Prev(b.Bytes, b.Lo, b.Hi, c.Offset));
+
+    /// <summary><see cref="RefNext(Utf8String, StringCursor)"/> on the bounds of the string.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static (Rune, StringCursor) RefNext(StringBounds b, StringCursor c) =>
+        Cursors.RefNext(b.Bytes!, b.Hi, c.Offset >= b.Lo ? c.Offset : -1);
+
     /// <summary>The text between two cursors, the second exclusive.</summary>
     public static Utf8String Substring(Utf8String s, StringCursor start, StringCursor end) =>
         s.Substring(start, end);
@@ -151,6 +180,43 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
     public static bool operator >=(StringCursor a, StringCursor b) => a.Offset >= b.Offset;
 
     public override string ToString() => $"#<string-cursor {Offset}>";
+}
+
+/// <summary>
+/// The array of a string and the string's bounds in it: what a cursor step
+/// reads from the string.
+/// </summary>
+///
+/// <remarks>
+/// <list type="bullet">
+/// <item>Purpose: a loop that steps over a string that does not change gets
+/// the bounds once, before the loop, and gives them to the
+/// <see cref="StringCursor"/> steps that take a <see cref="StringBounds"/>.
+/// Each step then does not test again whether the string is a whole array or
+/// a slice. Bjolang's compiler does this for its loops.</item>
+/// <item>The fields are internal, so code outside BjoString and Bjolang's
+/// runtime cannot get or write the array.</item>
+/// <item>The bounds keep the array alive, as the string does.</item>
+/// <item><c>default</c> is the bounds of the empty string.</item>
+/// </list>
+/// </remarks>
+[NonUserCode]
+public readonly struct StringBounds
+{
+    internal readonly byte[]? Bytes;
+    internal readonly int Lo;
+    internal readonly int Hi;
+
+    internal StringBounds(byte[]? bytes, int lo, int hi)
+    {
+        Bytes = bytes;
+        Lo = lo;
+        Hi = hi;
+    }
+
+    /// <summary>The bounds of <paramref name="s"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static StringBounds Of(Utf8String s) => s.GetBounds();
 }
 
 /// <summary>

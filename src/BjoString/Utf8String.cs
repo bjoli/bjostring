@@ -249,7 +249,7 @@ public readonly partial struct Utf8String :
     /// either of which would keep a loop's string and bounds in memory.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal Bounds GetBounds()
+    internal StringBounds GetBounds()
     {
         var d = _data;
         if (d is not null)
@@ -263,14 +263,6 @@ public readonly partial struct Utf8String :
             return new(p.Bytes, p.Start, p.End);
         }
         return default;
-    }
-
-    [NonUserCode]
-    internal readonly struct Bounds(byte[]? bytes, int lo, int hi)
-    {
-        public readonly byte[]? Bytes = bytes;
-        public readonly int Lo = lo;
-        public readonly int Hi = hi;
     }
 
     internal byte[]? Bytes => _data is Part p ? p.Bytes : Unsafe.As<byte[]?>(_data);
