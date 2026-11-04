@@ -12,6 +12,7 @@
  */
 
 using System.Collections;
+using System.Runtime.CompilerServices;
 using System.Text;
 
 namespace BjoString;
@@ -33,15 +34,21 @@ public struct RuneEnumerator : IEnumerator<Rune>, IEnumerable<Rune>
         _current = default;
     }
 
-    public readonly Rune Current => _current;
+    public readonly Rune Current
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => _current;
+    }
 
     readonly object IEnumerator.Current => _current;
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool MoveNext()
     {
-        if (_next >= _end) return false;
-        _current = Utf8Ops.Decode(_bytes, _next, out int width);
-        _next += width;
+        int i = _next;
+        if (i >= _end) return false;
+        (_current, var next) = Cursors.RefNext(_bytes!, _end, i);
+        _next = next.Offset;
         return true;
     }
 

@@ -69,6 +69,15 @@ var cyrUtf8 = Utf8String.FromUtf16(cyrText);
 Run("cursor walk, Cyrillic", "MB/s", cyrUtf8.ByteLength,
     () => Utf16Walk(cyrText),
     () => Utf8Walk(cyrUtf8));
+// Hiragana letters, so most scalars take three bytes.
+var cjkText = new string(asciiText.Select(ch => ch is >= 'a' and <= 'z' ? (char)('\u3042' + (ch - 'a')) : ch).ToArray());
+var cjkUtf8 = Utf8String.FromUtf16(cjkText);
+Run("cursor walk, CJK (3-byte)", "MB/s", cjkUtf8.ByteLength,
+    () => Utf16Walk(cjkText),
+    () => Utf8Walk(cjkUtf8));
+Run("enumerator walk, a slice", "MB/s", uSlice.ByteLength,
+    () => Utf16Walk(text),
+    () => Utf8EnumerateWalk(uSlice));
 var nl = Utf8String.FromUtf16("\n");
 Run("split on newline", "MB/s", u.ByteLength,
     () => text.Split("\n").Length,
@@ -207,6 +216,17 @@ static int Utf8Walk(Utf8String s)
     for (var c = StringCursor.Start(s); !StringCursor.AtEnd(s, c);)
     {
         (Rune r, c) = StringCursor.RefNext(s, c);
+        sum += r.Value;
+    }
+    return sum;
+}
+
+[MethodImpl(MethodImplOptions.NoInlining)]
+static int Utf8EnumerateWalk(Utf8String s)
+{
+    int sum = 0;
+    foreach (var r in s.EnumerateRunes())
+    {
         sum += r.Value;
     }
     return sum;

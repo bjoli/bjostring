@@ -51,14 +51,26 @@ internal static class Utf8Ops
             width = 1;
             return Unsafe.BitCast<uint, Rune>(b0);
         }
-        (Rune r, width) = DecodeMulti(s, i);
-        return r;
+        ref byte p = ref Unsafe.Add(ref MemoryMarshal.GetReference(s), (nint)(uint)i);
+        if (b0 < 0xE0)
+        {
+            width = 2;
+            return Unsafe.BitCast<uint, Rune>(((b0 & 0x1F) << 6) | (Unsafe.Add(ref p, 1) & 0x3Fu));
+        }
+        if (b0 < 0xF0)
+        {
+            width = 3;
+            return Unsafe.BitCast<uint, Rune>(((b0 & 0x0F) << 12) | ((Unsafe.Add(ref p, 1) & 0x3Fu) << 6) | (Unsafe.Add(ref p, 2) & 0x3Fu));
+        }
+        width = 4;
+        return Unsafe.BitCast<uint, Rune>(((b0 & 0x07) << 18) | ((Unsafe.Add(ref p, 1) & 0x3Fu) << 12) | ((Unsafe.Add(ref p, 2) & 0x3Fu) << 6) | (Unsafe.Add(ref p, 3) & 0x3Fu));
     }
 
     /// <summary>
     /// Decodes a sequence of two to four bytes. The pair comes back in one
     /// register; an <c>out</c> width would keep a caller's loop state on the stack.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static (Rune Rune, int Width) DecodeMulti(ReadOnlySpan<byte> s, int i)
     {
         uint b0 = s[i];
@@ -69,7 +81,7 @@ internal static class Utf8Ops
         {
             ThrowInvalid();
         }
-        ref byte p = ref Unsafe.Add(ref MemoryMarshal.GetReference(s), i);
+        ref byte p = ref Unsafe.Add(ref MemoryMarshal.GetReference(s), (nint)(uint)i);
         uint b1 = Unsafe.Add(ref p, 1) & 0x3Fu;
         if (width == 2)
         {
@@ -135,15 +147,98 @@ internal static class Utf8Ops
         return n;
     }
 
+    private static readonly ulong Seed = (ulong)Random.Shared.NextInt64() | 1UL;
+    private const ulong P0 = 0xA0761D6478BD642FUL;
+    private const ulong P1 = 0xE7037ED1A0B428DBUL;
+    private const ulong P2 = 0x8EBC6AF09C88C6E3UL;
+    private const ulong P3 = 0x589965CC75374CC3UL;
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static ulong Mix(ulong a, ulong b)
+    {
+        ulong hi = Math.BigMul(a, b, out ulong lo);
+        return hi ^ lo;
+    }
+
     /// <summary>
-    /// A hash of the bytes alone, so that a slice and a string with the same
-    /// text hash alike. Marvin (the randomized hash of <c>string</c>) reads them
-    /// two at a time, and an odd last byte is mixed in after.
+    /// A per-process randomized Wyhash-style folded-multiply hash of the bytes,
+    /// inlined for short strings (up to 16 bytes) and 4-way unrolled for long ones.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int Hash(ReadOnlySpan<byte> s)
     {
-        int h = string.GetHashCode(MemoryMarshal.Cast<byte, char>(s));
-        return (s.Length & 1) == 0 ? h : HashCode.Combine(h, s[^1]);
+        ref byte r = ref MemoryMarshal.GetReference(s);
+        int len = s.Length;
+        ulong seed = Seed ^ (uint)len;
+        if (len <= 16)
+        {
+            ulong a, b;
+            if (len >= 4)
+            {
+                if (len >= 8)
+                {
+                    a = Unsafe.ReadUnaligned<ulong>(ref r);
+                    b = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, len - 8));
+                }
+                else
+                {
+                    a = Unsafe.ReadUnaligned<uint>(ref r);
+                    b = Unsafe.ReadUnaligned<uint>(ref Unsafe.Add(ref r, len - 4));
+                }
+            }
+            else if (len > 0)
+            {
+                a = ((ulong)r << 16) | ((ulong)Unsafe.Add(ref r, len >> 1) << 8) | Unsafe.Add(ref r, len - 1);
+                b = 0;
+            }
+            else
+            {
+                a = 0;
+                b = 0;
+            }
+            ulong h = Mix(a ^ P0, b ^ seed);
+            return (int)(h ^ (h >> 32));
+        }
+        return HashLong(ref r, len, seed);
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static int HashLong(ref byte r, int len, ulong seed)
+    {
+        nuint i = 0;
+        nuint remaining = (nuint)len;
+        if (remaining > 64)
+        {
+            ulong s0 = seed;
+            ulong s1 = seed ^ P1;
+            ulong s2 = seed ^ P2;
+            ulong s3 = seed ^ P3;
+            do
+            {
+                s0 = Mix(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i)) ^ P0,
+                         Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i + 8)) ^ s0);
+                s1 = Mix(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i + 16)) ^ P1,
+                         Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i + 24)) ^ s1);
+                s2 = Mix(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i + 32)) ^ P2,
+                         Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i + 40)) ^ s2);
+                s3 = Mix(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i + 48)) ^ P3,
+                         Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i + 56)) ^ s3);
+                i += 64;
+                remaining -= 64;
+            } while (remaining > 64);
+            seed = s0 ^ s1 ^ s2 ^ s3;
+        }
+        while (remaining > 16)
+        {
+            seed = Mix(Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i)) ^ P0,
+                       Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, i + 8)) ^ seed);
+            i += 16;
+            remaining -= 16;
+        }
+        ulong a = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, (nuint)len - 16));
+        ulong b = Unsafe.ReadUnaligned<ulong>(ref Unsafe.Add(ref r, (nuint)len - 8));
+        ulong h = Mix(a ^ P0, b ^ seed);
+        return (int)(h ^ (h >> 32));
     }
 
     /// <summary>Byte order, which for UTF-8 is scalar order.</summary>

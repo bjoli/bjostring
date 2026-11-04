@@ -188,22 +188,45 @@ public readonly partial struct Utf8String :
     internal object? Data => _data;
 
     /// <summary>The length in bytes: the storage length, not the number of scalars.</summary>
-    public int ByteLength => IsWhole(_data) ? Unsafe.As<byte[]>(_data)!.Length : PartLength(_data);
-
-    private static int PartLength(object? data) => data is Part p ? p.Length : 0;
+    public int ByteLength
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            var d = _data;
+            if (d is not null)
+            {
+                if (d.GetType() == typeof(byte[]))
+                {
+                    return Unsafe.As<byte[]>(d).Length;
+                }
+                return Unsafe.As<Part>(d).Length;
+            }
+            return 0;
+        }
+    }
 
     public bool IsEmpty => ByteLength == 0;
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<byte> AsSpan() => IsWhole(_data) ? Unsafe.As<byte[]>(_data) : PartSpan(_data);
-
     // Without the span constructor's range check: the bounds were checked
     // when the slice was made.
-    private static ReadOnlySpan<byte> PartSpan(object? data) =>
-        data is Part p
-            ? MemoryMarshal.CreateReadOnlySpan(
-                ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(p.Bytes), (nint)(uint)p.Start), p.Length)
-            : default;
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<byte> AsSpan()
+    {
+        var d = _data;
+        if (d is not null)
+        {
+            if (d.GetType() == typeof(byte[]))
+            {
+                var b = Unsafe.As<byte[]>(d);
+                return MemoryMarshal.CreateReadOnlySpan(ref MemoryMarshal.GetArrayDataReference(b), b.Length);
+            }
+            var p = Unsafe.As<Part>(d);
+            return MemoryMarshal.CreateReadOnlySpan(
+                ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(p.Bytes), (nint)(uint)p.Start), p.Length);
+        }
+        return default;
+    }
 
     /// <summary>The bytes between two cursors, the second exclusive.</summary>
     public ReadOnlySpan<byte> AsSpan(StringCursor start, StringCursor end)
@@ -224,16 +247,19 @@ public readonly partial struct Utf8String :
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal Bounds GetBounds()
     {
-        if (IsWhole(_data))
+        var d = _data;
+        if (d is not null)
         {
-            var b = Unsafe.As<byte[]>(_data)!;
-            return new(b, 0, b.Length);
+            if (d.GetType() == typeof(byte[]))
+            {
+                var b = Unsafe.As<byte[]>(d);
+                return new(b, 0, b.Length);
+            }
+            var p = Unsafe.As<Part>(d);
+            return new(p.Bytes, p.Start, p.End);
         }
-        return PartBounds(_data);
+        return default;
     }
-
-    internal static Bounds PartBounds(object? data) =>
-        data is Part p ? new(p.Bytes, p.Start, p.End) : default;
 
     [NonUserCode]
     internal readonly struct Bounds(byte[]? bytes, int lo, int hi)
@@ -260,7 +286,12 @@ public readonly partial struct Utf8String :
 
     public bool IsAscii() => Ascii.IsValid(AsSpan());
 
-    public RuneEnumerator EnumerateRunes() => new(Bytes, Start, End);
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public RuneEnumerator EnumerateRunes()
+    {
+        var b = GetBounds();
+        return new(b.Bytes, b.Lo, b.Hi);
+    }
 
     /// <summary>Whether this is all of its array, so that holding it holds nothing more.</summary>
     public bool IsCompact => _data is not Part;
@@ -268,6 +299,7 @@ public readonly partial struct Utf8String :
     /// <summary>The same text in an array of its own: the string itself when it already is.</summary>
     public Utf8String Copy() => IsCompact ? this : IsEmpty ? default : new(AsSpan().ToArray());
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Utf8String other) =>
         ReferenceEquals(_data, other._data) || AsSpan().SequenceEqual(other.AsSpan());
 
@@ -276,10 +308,12 @@ public readonly partial struct Utf8String :
     /// literal compiles to, with the literal as a <c>u8</c> constant, so that
     /// matching allocates nothing.
     /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool ContentEquals(ReadOnlySpan<byte> utf8) => AsSpan().SequenceEqual(utf8);
 
     public override bool Equals(object? obj) => obj is Utf8String s && Equals(s);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public override int GetHashCode() => Utf8Ops.Hash(AsSpan());
 
     public int CompareTo(Utf8String other) => Utf8Ops.Compare(AsSpan(), other.AsSpan());

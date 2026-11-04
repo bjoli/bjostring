@@ -11,6 +11,8 @@
  * availability requirements or notice obligations of Section 3 of the MPL 2.0.
  */
 
+using System.Runtime.CompilerServices;
+
 namespace BjoString;
 
 /// <summary>
@@ -29,14 +31,19 @@ public sealed class Utf8StringComparer :
 
     private Utf8StringComparer() { }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(Utf8String x, Utf8String y) => x.Equals(y);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int GetHashCode(Utf8String obj) => obj.GetHashCode();
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int Compare(Utf8String x, Utf8String y) => x.CompareTo(y);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(ReadOnlySpan<byte> alternate, Utf8String other) => other.ContentEquals(alternate);
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public int GetHashCode(ReadOnlySpan<byte> alternate) => Utf8Ops.Hash(alternate);
 
     public Utf8String Create(ReadOnlySpan<byte> alternate) => Utf8String.FromUtf8(alternate);
