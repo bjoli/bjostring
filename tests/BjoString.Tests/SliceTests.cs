@@ -133,10 +133,6 @@ public static class SliceTests
             Check.Equal(mid.TrimStart(), sl.TrimStartSlice().ToString(), "trim start slice");
             Check.Equal(mid.TrimEnd(), sl.TrimEndSlice().ToString(), "trim end slice");
             Check.Equal(Runes(mid.EnumerateRunes().Reverse()), sl.Reverse().ToString(), "reverse");
-            int width = rng.Next(14);
-            string fill = new('.', Math.Max(0, width - mid.EnumerateRunes().Count()));
-            Check.Equal(fill + mid, sl.PadLeft(width, new Rune('.')).ToString(), "pad left");
-            Check.Equal(mid + fill, sl.PadRight(width, new Rune('.')).ToString(), "pad right");
             Check.SequenceEqual(mid.EnumerateRunes(), sl.EnumerateRunes(), "runes");
             Check.SequenceEqual(Encoding.UTF8.GetBytes(mid), sl.AsMemory().ToArray(), "memory");
 
@@ -189,7 +185,6 @@ public static class SliceTests
         {
             Check.True(ReferenceEquals(s.Bytes, s.Replace(U("x"), U("y")).Bytes), $"replace, {what}");
             Check.True(ReferenceEquals(s.Bytes, s.ToUpperInvariant().Bytes), $"upper, {what}");
-            Check.True(ReferenceEquals(s.Bytes, s.PadLeft(2, new Rune(' ')).Bytes), $"pad, {what}");
             Check.True(ReferenceEquals(s.Bytes, s.Trim().Bytes), $"trim, {what}");
             Check.True(ReferenceEquals(s.Bytes, s.Split(U(",")).Single().Bytes), $"split, {what}");
             Check.True(ReferenceEquals(s.Bytes, Utf8String.Concat(U(""), s, U("")).Bytes), $"concat of one, {what}");

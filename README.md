@@ -80,7 +80,8 @@ Mozilla Public License, version 2.0, with the linking exception in
 | `string-contains?`, `-starts-with?`, `-ends-with?` | `Contains`, `StartsWith`, `EndsWith` |
 | `string-replace`, `string-split`, `string-join` | `Replace`, `Split` / `EnumerateSplit`, `Join` |
 | `string-upcase`, `string-downcase` | `ToUpperInvariant`, `ToLowerInvariant` (per scalar, as today) |
-| `string-trim*`, `string-pad-*`, `string-reverse` | `Trim*`, `PadLeft`/`PadRight`, `Reverse` |
+| `string-trim*`, `string-reverse` | `Trim*`, `Reverse` |
+| `string-pad-*` | written in Bjolang (`prelude.bjo`) |
 | `substring/slice`, `string-trim*/slice`, `string-split/slice`, `string-copy` | `Slice`, `Trim*Slice`, `SplitSlices`, `Copy` |
 | `stringbuilder-*` | `Utf8StringBuilder` (`add-code!` → `AppendByte`, `code-ref` → `ByteAt`, `length` → `ByteLength`) |
 | `int->string`, `string->int`, `BjoNum.Parse*(StringBuilder)` | `Utf8Number.Format`, `Utf8Number.Parse*` (strings, spans, builders) |

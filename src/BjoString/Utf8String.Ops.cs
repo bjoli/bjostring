@@ -313,35 +313,6 @@ public readonly partial struct Utf8String
         return lo == 0 && hi == ByteLength ? this : new(Bytes, Start + lo, hi - lo);
     }
 
-    /// <summary>Padded on the left with <paramref name="pad"/> to <paramref name="width"/> scalars.</summary>
-    public Utf8String PadLeft(int width, Rune pad) => Pad(width, pad, left: true);
-
-    /// <summary>Padded on the right with <paramref name="pad"/> to <paramref name="width"/> scalars.</summary>
-    public Utf8String PadRight(int width, Rune pad) => Pad(width, pad, left: false);
-
-    private Utf8String Pad(int width, Rune pad, bool left)
-    {
-        int missing = width - Count();
-        if (missing <= 0) return this;
-        var padBytes = Utf8Ops.Encode(pad, stackalloc byte[4]);
-        var text = AsSpan();
-        var r = new byte[checked(text.Length + missing * padBytes.Length)];
-        var fill = left ? r.AsSpan(0, r.Length - text.Length) : r.AsSpan(text.Length);
-        if (padBytes.Length == 1)
-        {
-            fill.Fill(padBytes[0]);
-        }
-        else
-        {
-            for (int i = 0; i < fill.Length; i += padBytes.Length)
-            {
-                padBytes.CopyTo(fill[i..]);
-            }
-        }
-        text.CopyTo(left ? r.AsSpan(r.Length - text.Length) : r);
-        return new(r);
-    }
-
     /// <summary>The scalars in reverse order.</summary>
     public Utf8String Reverse() => ByteLength <= 1 ? this : new(Utf8Ops.Reverse(AsSpan()));
 }

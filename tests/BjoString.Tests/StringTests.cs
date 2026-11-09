@@ -337,13 +337,6 @@ public static class StringTests
             Check.Equal(s.TrimEnd(), u.TrimEnd().ToString(), "trim end");
             Check.Equal(s.Trim(), u.TrimSlice().ToString(), "trim slice");
 
-            int count = s.EnumerateRunes().Count();
-            int width = rng.Next(15);
-            var pad = rng.Next(2) == 0 ? new Rune('.') : new Rune(0x1F600);
-            string fill = string.Concat(Enumerable.Repeat(pad.ToString(), Math.Max(0, width - count)));
-            Check.Equal(fill + s, u.PadLeft(width, pad).ToString(), "pad left");
-            Check.Equal(s + fill, u.PadRight(width, pad).ToString(), "pad right");
-
             Check.Equal(Runes(s.EnumerateRunes().Reverse()), u.Reverse().ToString(), "reverse");
         }
     }
