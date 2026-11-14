@@ -120,6 +120,19 @@ public sealed class Utf8StringBuilder
         return _buffer.AsSpan(0, _length);
     }
 
+    /// <summary>
+    /// <see cref="AsSpan"/> as memory, for an asynchronous write. Valid until
+    /// the next append or <see cref="Clear"/>.
+    /// </summary>
+    public ReadOnlyMemory<byte> AsMemory()
+    {
+        if (_more is not null)
+        {
+            Consolidate();
+        }
+        return _buffer.AsMemory(0, _length);
+    }
+
     // --- Appending ---------------------------------------------------------
 
     public Utf8StringBuilder Append(Rune r)
