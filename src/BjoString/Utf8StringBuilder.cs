@@ -27,9 +27,13 @@ namespace BjoString;
 /// <remarks>
 /// <para>
 /// Appends of strings, slices and scalars are valid by construction.
-/// <see cref="AppendByte"/> is the exception, for scanners that copy input a
-/// byte at a time: such bytes are only checked by <see cref="ToUtf8String"/>,
-/// which throws if they did not form whole scalars.
+/// <see cref="AppendByte"/>, <see cref="AppendBytes"/> and
+/// <see cref="AppendUtf16Unit"/> are the exceptions, for scanners that copy
+/// input a piece at a time. A multi-byte scalar added a byte at a time is
+/// incomplete between the appends, so such bytes are checked when the text
+/// leaves the builder: by <see cref="ToUtf8String"/>, and by
+/// <see cref="CheckValid"/> for a caller that sends the bytes out without a
+/// string. Both throw if the bytes do not form whole scalars.
 /// </para>
 /// <para>
 /// The text is held in one buffer while it is short, which doubles as it
@@ -466,16 +470,38 @@ public sealed class Utf8StringBuilder
             bytes = GC.AllocateUninitializedArray<byte>(ByteLength);
             CopyTo(bytes);
         }
+        CheckUnchecked(bytes, "stringbuilder->string");
+        return new(bytes);
+    }
+
+    /// <summary>
+    /// Throws unless the text so far is valid UTF-8. For a caller that sends
+    /// the bytes out without making a string of them, such as a write to a
+    /// port. Bytes that pass are not checked again.
+    /// </summary>
+    public void CheckValid(string op)
+    {
         if (_unchecked >= 0)
         {
-            if (!Utf8.IsValid(bytes.AsSpan(_unchecked)))
-            {
-                throw new InvalidOperationException(
-                    "stringbuilder->string: the bytes added with stringbuilder-add-code! are not valid UTF-8.");
-            }
-            _unchecked = -1;
+            CheckUnchecked(AsSpan(), op);
         }
-        return new(bytes);
+    }
+
+    // Checks the bytes from `_unchecked` on. `bytes` is the whole text.
+    // Everything before `_unchecked` came from checked appends, so it ends on
+    // a scalar boundary and the check can start there.
+    private void CheckUnchecked(ReadOnlySpan<byte> bytes, string op)
+    {
+        if (_unchecked < 0)
+        {
+            return;
+        }
+        if (!Utf8.IsValid(bytes.Slice(_unchecked)))
+        {
+            throw new InvalidOperationException(
+                $"{op}: the bytes added with stringbuilder-add-byte!, stringbuilder-add-bytes! or stringbuilder-add-unit! are not valid UTF-8.");
+        }
+        _unchecked = -1;
     }
 
     /// <summary>The text so far as a .NET string, invalid bytes as U+FFFD.</summary>
