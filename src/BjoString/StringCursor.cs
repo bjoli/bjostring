@@ -165,6 +165,18 @@ public readonly record struct StringCursor : IComparable<StringCursor>, ICompari
         Cursors.RefNext(b.Bytes!, b.Hi, c.Offset >= b.Lo ? c.Offset : -1);
 
     /// <summary>The text between two cursors, the second exclusive.</summary>
+    // The steps on a StringForward, for a cursor that only goes forward on
+    // one string. They return and raise what the steps on the string return
+    // and raise, and do not test the start of the slice at each step.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Rune Ref(StringForward f, StringCursor c) =>
+        Cursors.RefForward(f.Bytes!, f.Hi, f.End, c.Offset);
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static StringCursor Next(StringForward f, StringCursor c) =>
+        Unsafe.BitCast<int, StringCursor>(Cursors.NextForward(f.Bytes!, f.Hi, f.End, c.Offset));
+
     public static Utf8String Substring(Utf8String s, StringCursor start, StringCursor end) =>
         s.Substring(start, end);
 
@@ -217,6 +229,46 @@ public readonly struct StringBounds
     /// <summary>The bounds of <paramref name="s"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static StringBounds Of(Utf8String s) => s.GetBounds();
+}
+
+/// <summary>
+/// The bounds of a string for the steps of one cursor that only goes forward
+/// on it: a loop variable whose next value is itself or its
+/// <c>string-cursor-next</c>.
+/// </summary>
+///
+/// <remarks>
+/// <list type="bullet">
+/// <item>Made once before the loop, from the string's bounds and the cursor
+/// that the loop starts with. The test that a cursor is not before the start
+/// of the slice is made here, and not at each step.</item>
+/// <item>A cursor that starts at or after the start of the slice stays there,
+/// as a step only goes forward. <c>Hi</c> is then the end of the string.</item>
+/// <item>A cursor that starts before the slice makes <c>Hi</c> 0, so that each
+/// step raises, as each step on the string raises for such a cursor.
+/// <c>End</c> is the end of the string for the message of the exception.</item>
+/// <item>Made only by the compiler. A step on any other cursor must take the
+/// string or its <see cref="StringBounds"/>.</item>
+/// </list>
+/// </remarks>
+[NonUserCode]
+public readonly struct StringForward
+{
+    internal readonly byte[]? Bytes;
+    internal readonly int Hi;
+    internal readonly int End;
+
+    internal StringForward(byte[]? bytes, int hi, int end)
+    {
+        Bytes = bytes;
+        Hi = hi;
+        End = end;
+    }
+
+    /// <summary>The forward bounds for a loop over <paramref name="b"/> that starts at <paramref name="c"/>.</summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static StringForward Of(StringBounds b, StringCursor c) =>
+        new(b.Bytes, c.Offset >= b.Lo ? b.Hi : 0, b.Hi);
 }
 
 /// <summary>
@@ -304,6 +356,60 @@ internal static class Cursors
     }
 
     /// <summary>Steps back over continuation bytes, which lands on a boundary even from inside a scalar.</summary>
+    // `Ref` and `Next` for a StringForward. The same code, but the message of
+    // the range error is chosen by `end`, the end of the string: `hi` is 0
+    // for a cursor that started before the slice.
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static Rune RefForward(byte[] s, int hi, int end, int i)
+    {
+        if ((uint)i >= (uint)hi)
+        {
+            ThrowOutside("string-cursor-ref", i, end);
+        }
+        uint b = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(s), (nint)(uint)i);
+        if (b >= 0x80)
+        {
+            if (b < 0xC2)
+            {
+                ThrowNotBoundary("string-cursor-ref");
+            }
+            ref byte p = ref Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(s), (nint)(uint)i);
+            uint c1 = Unsafe.Add(ref p, 1) & 0x3Fu;
+            if (b < 0xE0)
+            {
+                b = ((b & 0x1F) << 6) | c1;
+            }
+            else
+            {
+                uint c2 = Unsafe.Add(ref p, 2) & 0x3Fu;
+                b = b < 0xF0
+                    ? ((b & 0x0F) << 12) | (c1 << 6) | c2
+                    : ((b & 0x07) << 18) | (c1 << 12) | (c2 << 6) | (Unsafe.Add(ref p, 3) & 0x3Fu);
+            }
+        }
+        return Unsafe.BitCast<uint, Rune>(b);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static int NextForward(byte[] s, int hi, int end, int i)
+    {
+        if ((uint)i >= (uint)hi)
+        {
+            ThrowOutside("string-cursor-next", i, end);
+        }
+        uint b = Unsafe.Add(ref MemoryMarshal.GetArrayDataReference(s), (nint)(uint)i);
+        if (b < 0x80)
+        {
+            return i + 1;
+        }
+        if (b < 0xC2)
+        {
+            ThrowNotBoundary("string-cursor-next");
+        }
+        return i + (b < 0xE0 ? 2 : b < 0xF0 ? 3 : 4);
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static int Prev(byte[]? s, int lo, int hi, int i)
     {
